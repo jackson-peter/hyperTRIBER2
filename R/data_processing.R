@@ -1,155 +1,112 @@
-extractCountData <- function(dat, samp.names, stranded = FALSE) {
-  library(tidyverse)
+library(tidyverse)
+#' Extract count data from mpileup output
+#'
+#' Parses the output of the mpileup2bases perl script into a tidy
+#' per-sample list of base count tables.
+#'
+#' @param dat Data frame read from baseCounts_from_mpileup.txt (no header).
+#'   Expected columns: chr, pos, ref, then per sample 4 columns (A, T, C, G)
+#'   or 8 columns if stranded (A, T, C, G, a, t, c, g).
+#' @param samp_names Character vector of sample names.
+#' @param stranded Logical. If TRUE, expects 8 columns per sample. Default FALSE.
+#'
+#' @return A named list of tibbles (one per sample), each with columns:
+#'   chr, pos, ref, site_id, A, T, C, G (and strand if stranded).
+#'
+#' @importFrom dplyr bind_cols mutate filter pull if_any all_of bind_rows
+#' @importFrom purrr map set_names reduce
+#' @importFrom glue glue
+#' @importFrom rlang set_names
+#'
+#' @export
+extract_count_data <- function(dat, samp_names, stranded = FALSE) {
 
-  # Calculate column indices for each sample
-  base_cols <- if (stranded) 8 else 4
-  col_indices <- map(1:length(samp.names), ~ {
-    start <- 3 + ((.x - 1) * base_cols + 1)
-    end <- start + base_cols - 1
-    seq(start, end)
-  })
+  # -- Constants --
+  n_meta_cols     <- 3
+  base_cols_fwd   <- c("A", "T", "C", "G")
+  base_cols_rev   <- c("a", "t", "c", "g")
+  cols_per_sample <- ifelse(stranded, 8, 4)
+  n_samples       <- length(samp_names)
 
-  # Process each sample
-  data.list <- imap(col_indices, ~ {
-    samp_name <- samp.names[.y]
+  # -- Input validation --
+  expected_ncol <- n_meta_cols + (n_samples * cols_per_sample)
+  if (ncol(dat) != expected_ncol) {
+    stop(glue::glue(
+      "Column mismatch: expected {expected_ncol} ",
+      "({n_meta_cols} meta + {n_samples} samples x {cols_per_sample}), ",
+      "but got {ncol(dat)}."
+    ))
+  }
 
-    # Extract data for current sample
-    data_samp <- dat %>%
-      select(all_of(1:2), all_of(.x)) %>%
-      column_to_rownames("V1") %>%
-      as.matrix() %>%
-      setNames(if (stranded) {
-        c("A", "T", "C", "G", "a", "t", "c", "g")
-      } else {
-        c("A", "T", "C", "G")
-      })
+  # -- Extract and name metadata --
+  meta <- dat[, 1:n_meta_cols] |>
+    rlang::set_names(c("chr", "pos", "ref")) |>
+    dplyr::mutate(pos = as.integer(pos), chr = as.character(chr), ref = as.character(ref))
 
-    # Process stranded data
+  # -- Per-sample extraction --
+  data_list <- purrr::map(seq_along(samp_names), function(i) {
+
+    start_col <- n_meta_cols + (i - 1) * cols_per_sample + 1
+    end_col   <- n_meta_cols + i * cols_per_sample
+
+    sample_counts <- dat[, start_col:end_col] |>
+      dplyr::mutate(dplyr::across(dplyr::everything(), as.integer))
+
     if (stranded) {
-      data_samp <- data_samp %>%
-        as.data.frame() %>%
-        mutate(
-          strand = rep(c("+", "-"), each = nrow(dat)),
-          position = rep(dat$V2, times = 2)
-        ) %>%
-        pivot_longer(
-          cols = -c(strand, position),
-          names_to = "base",
-          values_to = "count"
-        ) %>%
-        pivot_wider(
-          id_cols = c(position, strand),
-          names_from = base,
-          values_from = count
-        ) %>%
-        mutate(
-          # Swap bases for negative strand
-          `A-` = t,
-          `T-` = a,
-          `C-` = g,
-          `G-` = c,
-          across(c(A, T, C, G), ~ ifelse(strand == "-", NA, .x))
-        ) %>%
-        select(position, strand, A, T, C, G) %>%
-        unite("id", position, strand, sep = ",") %>%
-        column_to_rownames("id") %>%
-        select(A, T, C, G) %>%
-        as.matrix()
-    }
+      colnames(sample_counts) <- c(base_cols_fwd, base_cols_rev)
 
-    # Track NA rows to remove later
-    na_rows <- which(is.na(data_samp), arr.ind = TRUE)[, 1]
+      fwd_total <- sum(sample_counts[, base_cols_fwd], na.rm = TRUE)
+      rev_total <- sum(sample_counts[, base_cols_rev], na.rm = TRUE)
+      message(glue::glue(
+        "{samp_names[i]}: fwd/rev ratio = {round(fwd_total / rev_total, 3)}"
+      ))
 
-    list(data = data_samp, na_rows = na_rows)
-  })
+      # Forward strand
+      fwd <- dplyr::bind_cols(meta, sample_counts[, base_cols_fwd]) |>
+        dplyr::mutate(strand = "+",
+                      site_id = paste0(chr, "_", pos, ",+"))
 
-  # Find all rows with NAs in any sample
-  all_na_rows <- unique(unlist(map(data.list, ~ .x$na_rows)))
+      # Reverse strand: swap a<->t, c<->g
+      rev_counts <- sample_counts[, c("t", "a", "g", "c")]
+      colnames(rev_counts) <- base_cols_fwd
 
-  # Remove NA rows from all samples
-  data.list <- map(data.list, ~ {
-    .x$data %>%
-      `row.names<-`(.) %>%
-      .[ -all_na_rows, ]
-  }) %>%
-    setNames(samp.names)
+      rev <- dplyr::bind_cols(meta, rev_counts) |>
+        dplyr::mutate(strand = "-",
+                      site_id = paste0(chr, "_", pos, ",-"))
 
-  return(data.list)
-}
+      dplyr::bind_rows(fwd, rev)
 
-
-restrict_data <- function(data_list, ref_base = NULL, design_vector,
-                          min_samp_treat = 3, min_count = 2, min_prop = 0.01,
-                          both_ways = FALSE, edits_of_interest = rbind(c("A", "G"), c("T", "C"))) {
-
-  # Input validation
-  if (!is.list(data_list)) stop("data_list must be a list")
-  if (length(design_vector) != length(data_list)) stop("design_vector length must match data_list")
-  if (!all(design_vector %in% c("control", "treat"))) stop("design_vector must contain only 'control' or 'treat'")
-
-  # Split data into control and treatment groups
-  split_data <- split(data_list, design_vector)
-  cont_data <- split_data$control
-  treat_data <- split_data$treat
-
-  combine_counts <- function(df_list, base) {
-    # Extract the specified base column from each dataframe
-    base_columns <- lapply(df_list, function(df) df[, base])
-    # Combine columns horizontally
-    cbind_list <- do.call(cbind, base_columns)
-    return(cbind_list)
-  }
-
-  cont_counts <- lapply(c("A", "T", "C", "G"), combine_counts, df_list = cont_data)
-  treat_counts <- lapply(c("A", "T", "C", "G"), combine_counts, df_list = treat_data)
-  names(cont_counts) <- names(treat_counts) <- c("A", "T", "C", "G")
-
-  # Determine reference base (either provided or dominant from controls)
-  dom_base <- if (is.null(ref_base)) {
-    dom_df <- as.data.frame(lapply(cont_counts, rowSums))
-    c("A","T","C","G")[max.col(dom_df, ties.method = "first")]
-  } else {
-    ref_base
-  }
-
-  # Initialize results list
-  tokeep_list <- vector("list", nrow(edits_of_interest))
-
-  for (i in seq_len(nrow(edits_of_interest))) {
-    my_ref <- edits_of_interest[i, 1]
-    my_targ <- edits_of_interest[i, 2]
-
-    # Calculate proportions with protection against division by zero
-    num_treat <- rowSums(treat_counts[[my_targ]])
-    denom_treat <- num_treat + rowSums(treat_counts[[my_ref]])
-    prop_treat <- ifelse(denom_treat == 0, 0, num_treat/denom_treat)
-
-    num_control <- rowSums(cont_counts[[my_targ]])
-    denom_control <- num_control + rowSums(cont_counts[[my_ref]])
-    prop_control <- ifelse(denom_control == 0, 0, num_control/denom_control)
-
-    # Count calculations
-    count_treat <- rowSums(treat_counts[[my_targ]])
-    count_control <- rowSums(cont_counts[[my_targ]])
-
-    tokeep_treat <- rowSums(treat_counts[[my_targ]] > 0) >= min_samp_treat
-    tokeep_control <- rowSums(cont_counts[[my_targ]] > 0) >= min_samp_treat
-
-    # Filtering logic
-    treat_ok <- tokeep_treat & (count_treat >= min_count) & (prop_treat > min_prop)
-    control_ok <- tokeep_control & (count_control >= min_count) & (prop_control > min_prop)
-
-    # Apply filtering based on both_ways parameter
-    if (both_ways) {
-      tokeep_list[[i]] <- (dom_base != my_targ) & (treat_ok | control_ok)
     } else {
-      tokeep_list[[i]] <- (dom_base != my_targ) & treat_ok
+      colnames(sample_counts) <- base_cols_fwd
+
+      dplyr::bind_cols(meta, sample_counts) |>
+        dplyr::mutate(site_id = paste0(chr, "_", pos))
     }
+  }) |>
+    purrr::set_names(samp_names)
+
+  # -- Remove sites with NA in any sample --
+  na_sites <- data_list |>
+    purrr::map(~ .x |>
+                 dplyr::filter(dplyr::if_any(dplyr::all_of(base_cols_fwd), is.na)) |>
+                 dplyr::pull(site_id)
+    ) |>
+    purrr::reduce(union)
+
+  if (length(na_sites) > 0) {
+    message(glue::glue("Removing {length(na_sites)} sites with NA values."))
+    data_list <- data_list |>
+      purrr::map(~ .x |> dplyr::filter(!site_id %in% na_sites))
+  } else {
+    message("No NA sites found. All sites retained.")
   }
 
-  # Combine filtering results and apply to data
-  use_table <- do.call(cbind, tokeep_list)
-  to_keep <- rowSums(use_table) > 0
+  # -- Summary --
+  n_sites <- nrow(data_list[[1]])
+  message(glue::glue(
+    "Extracted {n_samples} samples, {n_sites} sites each. ",
+    "Stranded: {stranded}."
+  ))
 
-  return(lapply(data_list, function(x) x[to_keep, ]))
+  return(data_list)
 }
