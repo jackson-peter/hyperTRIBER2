@@ -337,4 +337,440 @@ lookup_reference_base <- function(pos_dat, ref_gr, stranded = FALSE) {
   ref_bases
 }
 
+#' Compute per-site editing proportions vs reference
+#'
+#' For each site, sums counts across all samples and returns the proportion
+#' of reads supporting each base (A, T, C, G) plus total coverage.
+#'
+#' @param data_list List of count data frames (one per sample)
+#' @param ref_gr GRanges with a `ref` column
+#' @param stranded Logical
+#' @return data.frame with chr, pos, (strand), ref, total, edit.A/T/C/G
+editing_proportions_vs_reference <- function(data_list,
+                                             ref_gr,
+                                             stranded = FALSE) {
+
+  dnames <- row.names(data_list[[1]])
+
+  # -- 1. Parse positions and look up reference base -------------------------
+  pos_dat <- parse_site_positions(dnames, stranded)
+  pos_dat$ref <- lookup_reference_base(pos_dat, ref_gr, stranded)
+
+  # -- 2. Sum counts across all samples per base -----------------------------
+  bases <- c("A", "T", "C", "G")
+  count_mat <- vapply(bases, function(b) {
+    rowSums(do.call(cbind, lapply(data_list, function(x) x[, b])))
+  }, numeric(length(dnames)))
+  colnames(count_mat) <- bases
+
+  # -- 3. Compute proportions ------------------------------------------------
+  total <- rowSums(count_mat)
+  props <- count_mat / total  # NaN where total == 0, that's fine
+
+  pos_dat$total  <- total
+  pos_dat$edit.A <- props[, "A"]
+  pos_dat$edit.T <- props[, "T"]
+  pos_dat$edit.C <- props[, "C"]
+  pos_dat$edit.G <- props[, "G"]
+
+  pos_dat
+}
+
+#' Extract significant editing hits from DEXSeq results
+#'
+#' Filters DEXSeq results by FDR, resolves multiple edit types per site,
+#' and computes editing proportions in treat/control groups.
+#'
+#' @param dexseq_res DEXSeqResults data frame with padj, groupID, featureID, etc.
+#' @param stranded Logical
+#' @param fdr FDR threshold
+#' @param n_cores Number of parallel cores
+#' @param add_meta Logical, whether to compute per-site metadata
+#' @param data_list List of per-sample count data frames
+#' @param edits_of_interest Matrix of ref->target pairs
+#' @param design_vector Named vector of sample group assignments
+#' @param include_ref Logical, add reference base annotation
+#' @param ref_gr GRanges with ref column
+#' @param symmetric Logical, if TRUE use the "more edited" group for proportion
+#' @return GRanges of significant hits with metadata columns
+get_hits <- function(dexseq_res,
+                     stranded = FALSE,
+                     fdr = 0.1,
+                     n_cores = 20,
+                     add_meta = TRUE,
+                     data_list,
+                     edits_of_interest = rbind(c("A", "G"), c("T", "C")),
+                     design_vector,
+                     include_ref = TRUE,
+                     ref_gr = NULL,
+                     symmetric = FALSE) {
+
+
+
+  # -- 1. Filter results to edits of interest at given FDR -------------------
+  target_bases <- unique(edits_of_interest[, 2])
+  target_pattern <- paste0("E[", paste(target_bases, collapse = ""), "]")
+  dexseq_res <- dexseq_res[grep(target_pattern, dexseq_res$featureID), ]
+  sig_res <- dexseq_res[which(dexseq_res$padj <= fdr), ]
+  hit_ids <- unique(sig_res$groupID)
+
+  message(sprintf("Number of significant hits: %d", length(hit_ids)))
+
+  # -- 2. Build GRanges of hit positions ------------------------------------
+  pos_dat <- parse_site_positions(hit_ids, stranded)
+  pos_gr <- GenomicRanges::GRanges(
+    seqnames = pos_dat$chr,
+    ranges   = IRanges::IRanges(start = pos_dat$pos, width = 1),
+    strand   = if (stranded) pos_dat$strand else "*"
+  )
+  names(pos_gr) <- hit_ids
+
+  # -- 3. Without metadata, just assign top edit base and return -------------
+  if (!add_meta) {
+    sig_res <- sig_res[order(sig_res$padj), ]
+    top_feature <- tapply(sig_res$featureID, sig_res$groupID,
+                          function(x) x[1])
+    pos_gr$edit_base <- NA_character_
+    pos_gr[names(top_feature)]$edit_base <- gsub("^E", "", top_feature)
+    return(pos_gr)
+  }
+
+  # -- 4. Compute per-site metadata in parallel ------------------------------
+  treat_idx  <- names(which(design_vector == "treat"))
+  ctrl_idx   <- names(which(design_vector == "control"))
+
+  if (n_cores > 1) {
+    doParallel::registerDoParallel(cores = n_cores)
+    on.exit(doParallel::stopImplicitCluster(), add = TRUE)
+    meta_list <- foreach::foreach(i = seq_along(pos_gr)) %dopar% {
+      compute_site_meta(
+        site_id            = names(pos_gr)[i],
+        sig_res            = sig_res,
+        data_list          = data_list,
+        edits_of_interest  = edits_of_interest,
+        design_vector      = design_vector,
+        treat_idx          = treat_idx,
+        ctrl_idx           = ctrl_idx,
+        symmetric          = symmetric
+      )
+    }
+  } else {
+    meta_list <- lapply(seq_along(pos_gr), function(i) {
+      compute_site_meta(
+        site_id            = names(pos_gr)[i],
+        sig_res            = sig_res,
+        data_list          = data_list,
+        edits_of_interest  = edits_of_interest,
+        design_vector      = design_vector,
+        treat_idx          = treat_idx,
+        ctrl_idx           = ctrl_idx,
+        symmetric          = symmetric
+      )
+    })
+  }
+
+  meta <- do.call(rbind, meta_list)
+
+  # -- 5. Optionally add reference base from GRanges ------------------------
+  if (include_ref && !is.null(ref_gr)) {
+    meta$base <- lookup_reference_base(pos_dat, ref_gr, stranded)
+  }
+
+  # -- 6. Attach metadata and filter self-edits -----------------------------
+  if ("strand" %in% colnames(meta)) {
+    colnames(meta)[colnames(meta) == "strand"] <- "gtf_strand"
+  }
+  GenomicRanges::mcols(pos_gr) <- meta
+  pos_gr$ref  <- as.vector(pos_gr$ref)
+  pos_gr$targ <- as.vector(pos_gr$targ)
+
+  # Remove sites where ref == target (not real edits)
+  pos_gr <- pos_gr[pos_gr$ref != pos_gr$targ]
+
+  pos_gr
+}
+
+
+#' Compute metadata for a single hit site
+#' @keywords internal
+compute_site_meta <- function(site_id, sig_res, data_list,
+                              edits_of_interest, design_vector,
+                              treat_idx, ctrl_idx, symmetric) {
+
+  # Stack all samples for this site
+  site_counts <- do.call(rbind, lapply(data_list, function(x) x[site_id, ]))
+
+  # Determine reference as dominant base
+  col_totals <- colSums(site_counts)
+  ref <- names(which.max(col_totals))
+
+  # Get significant hits for this site
+  hit <- sig_res[sig_res$groupID == site_id, , drop = FALSE]
+
+  # Resolve multiple edit types: keep only valid ref->target edits
+  if (nrow(hit) > 1) {
+    valid_targets <- edits_of_interest[edits_of_interest[, 1] == ref, 2,
+                                       drop = FALSE]
+    hit_targets <- gsub("^E", "", hit$featureID)
+    keep <- hit_targets %in% valid_targets
+    hit <- hit[keep, , drop = FALSE]
+
+    if (nrow(hit) > 1) {
+      message(sprintf("Multiple edits at %s, selecting most significant",
+                      site_id))
+      hit <- hit[which.min(hit$pvalue), , drop = FALSE]
+    }
+  }
+
+  targ <- gsub("^E", "", hit$featureID)
+
+  # Editing proportions: target / (ref + target)
+  treat_ref  <- sum(site_counts[treat_idx, ref])
+  treat_targ <- sum(site_counts[treat_idx, targ])
+  ctrl_ref   <- sum(site_counts[ctrl_idx, ref])
+  ctrl_targ  <- sum(site_counts[ctrl_idx, targ])
+  fc <- hit$log2fold_treat_control
+
+  if (symmetric && fc < 0) {
+    # Swap: report the "more edited" group as prop
+    prop      <- ctrl_targ / (ctrl_ref + ctrl_targ)
+    prop_ctrl <- treat_targ / (ctrl_ref + ctrl_targ)
+  } else {
+    prop      <- treat_targ / (treat_ref + treat_targ)
+    prop_ctrl <- ctrl_targ  / (ctrl_ref + ctrl_targ)
+  }
+
+  data.frame(
+    name         = site_id,
+    ref          = ref,
+    targ         = targ,
+    prop         = prop,
+    prop_ctrl    = prop_ctrl,
+    padj         = hit$padj,
+    pvalue       = hit$pvalue,
+    control_par  = hit$control,
+    treat_par    = hit$treat,
+    fold_change  = fc,
+    tags_treat   = sum(unlist(lapply(data_list, function(x) x[site_id, targ]))[treat_idx]),
+    tags_control = sum(unlist(lapply(data_list, function(x) x[site_id, targ]))[ctrl_idx]),
+    stringsAsFactors = FALSE
+  )
+}
+
+
+
+addStrandForHyperTRIBE <- function(posGR)
+{
+  strand <- rep("*",length(posGR))
+  strand[posGR$ref=="T" & posGR$targ=="C"] <- "-"
+  strand[posGR$ref=="A" & posGR$targ=="G"] <- "+"
+  strand(posGR) <- Rle(strand)
+  return(posGR)
+}
+
+handleAnoType <- function(x) {
+  x_uniq <- unique(x)
+  # Remove redundant "exon" when a more specific type exists
+  specific <- intersect(x_uniq, c("3UTR", "5UTR", "CDS"))
+  if (length(specific) == 1) return(specific)
+  if (length(x_uniq) == 1) return(x_uniq)
+  stop("Ambiguous annotation types: ", paste(x_uniq, collapse = ", "))
+}
+
+
+#' Annotate editing sites with gene/transcript information from a GTF
+#'
+#' @param pos_gr GRanges of editing sites
+#' @param gtf_gr GRanges from a parsed GTF (with $type, $gene_id, $transcript_id)
+#' @param gene_ids Named vector mapping gene IDs to gene names
+#' @param quant Named numeric vector of transcript-level expression (e.g. TPM),
+#'        names should match transcript IDs in gtf_gr
+#' @param assign_strand Logical; if TRUE, overwrite strand of pos_gr from GTF
+#' @param n_cores Number of cores for parallel processing
+#' @param flank_distance Distance to extend search if no direct overlap found
+#' @return pos_gr with added metadata columns
+#' @export
+annotate_with_genes <- function(pos_gr,
+                                gtf_gr,
+                                gene_ids,
+                                quant,
+                                assign_strand = TRUE,
+                                n_cores = 1,
+                                flank_distance = 1000) {
+
+  ## helper: resolve a single site ------------------------------------------
+  annotate_single_site <- function(idx) {
+    site <- pos_gr[idx]
+    ols  <- gtf_gr[subjectHits(findOverlaps(site, gtf_gr, ignore.strand = FALSE))]
+    out_of_range <- FALSE
+
+    # If no direct overlap, try flanked window
+    if (length(ols) == 0) {
+      out_of_range <- TRUE
+      ols <- gtf_gr[subjectHits(findOverlaps(site + flank_distance, gtf_gr,
+                                             ignore.strand = FALSE))]
+    }
+
+    # No annotation at all
+    if (length(ols) == 0) {
+      return(list(
+        info = c(gene = NA, name = NA, strand = "*",
+                 transcripts = NA, transcript_tpm = NA,
+                 transcript_types = NA, out_of_range = out_of_range),
+        fprop      = NA,
+        new_strand = "*"
+      ))
+    }
+
+    # --- Resolve gene (pick one if multiple) --------------------------------
+    genes   <- unique(ols$gene_id)
+    strands <- tapply(as.vector(strand(ols)), ols$gene_id, `[`, 1)
+
+    if (length(genes) > 1) {
+      genes <- resolve_gene_ambiguity(genes, ols, pos_gr, quant)
+      strands <- strands[genes]
+      ols <- ols[ols$gene_id %in% genes]
+    }
+
+    new_strand <- if (length(strands) > 0) strands[1] else "*"
+
+    # --- Resolve transcript annotation types --------------------------------
+    feature_type <- tapply(as.vector(ols$type), ols$transcript_id, handleAnoType)
+    transcripts  <- names(feature_type)
+
+    # --- Order transcripts by expression ------------------------------------
+    tx_expr <- order_transcripts_by_expression(transcripts, quant)
+    transcripts  <- names(tx_expr)
+    feature_type <- feature_type[transcripts]
+
+    # --- Compute relative position within feature ---------------------------
+    fprop <- compute_feature_proportions(
+      site, ols, feature_type, new_strand
+    )
+
+    gene_name <- gene_ids[genes]
+
+    list(
+      info = c(
+        gene             = paste(genes, collapse = ","),
+        name             = paste(gene_name, collapse = ","),
+        strand           = paste(strands, collapse = ","),
+        transcripts      = paste(transcripts, collapse = ","),
+        transcript_tpm   = paste(round(tx_expr, 2), collapse = ","),
+        transcript_types = paste(feature_type, collapse = ","),
+        out_of_range     = out_of_range
+      ),
+      fprop      = paste(round(fprop, 4), collapse = ","),
+      new_strand = new_strand
+    )
+  }
+
+  ## run in parallel or serial -----------------------------------------------
+  if (n_cores > 1) {
+    doParallel::registerDoParallel(cores = n_cores)
+    on.exit(doParallel::stopImplicitCluster(), add = TRUE)
+    results <- foreach::foreach(
+      i = seq_along(pos_gr),
+    .packages = c("GenomicRanges", "IRanges", "S4Vectors")
+    )%dopar% {
+      annotate_single_site(i)
+    }
+  } else {
+    results <- lapply(seq_along(pos_gr), annotate_single_site)
+  }
+
+  ## assemble results --------------------------------------------------------
+  info_mat <- do.call(rbind, lapply(results, `[[`, "info"))
+
+  pos_gr$gene             <- info_mat[, "gene"]
+  pos_gr$name             <- info_mat[, "name"]
+  pos_gr$gtf_strand       <- info_mat[, "strand"]
+  pos_gr$transcripts      <- info_mat[, "transcripts"]
+  pos_gr$transcript_tpm   <- info_mat[, "transcript_tpm"]
+  pos_gr$transcript_types <- info_mat[, "transcript_types"]
+  pos_gr$out_of_range     <- as.logical(info_mat[, "out_of_range"])
+  pos_gr$feature_prop     <- vapply(results, `[[`, character(1), "fprop")
+
+  if (assign_strand) {
+    strand(pos_gr) <- vapply(results, `[[`, character(1), "new_strand")
+  }
+
+  pos_gr
+}
+
+
+#' Resolve gene ambiguity when a site overlaps multiple genes
+#' @keywords internal
+resolve_gene_ambiguity <- function(genes, ols, pos_gr, quant) {
+  # Primary: pick gene with most overlapping features to all sites
+  overlap_counts <- vapply(genes, function(g) {
+    length(findOverlaps(ols[ols$gene_id == g], pos_gr))
+  }, integer(1))
+
+  if (sum(overlap_counts == max(overlap_counts)) == 1) {
+    return(names(which.max(overlap_counts)))
+  }
+
+  # Tiebreak: highest total expression
+  expr_sums <- vapply(genes, function(g) {
+    matched <- grep(g, names(quant))
+    if (length(matched) > 0) sum(quant[matched]) else 0
+  }, numeric(1))
+
+  genes[which.max(expr_sums)]
+}
+
+
+#' Order transcripts by expression, NAs last
+#' @keywords internal
+order_transcripts_by_expression <- function(transcripts, quant) {
+  if (length(transcripts) == 0) {
+    return(stats::setNames(NA_real_, ""))
+  }
+
+  tx_expr <- rep(NA_real_, length(transcripts))
+  names(tx_expr) <- transcripts
+
+  matched <- transcripts[transcripts %in% names(quant)]
+  if (length(matched) > 0) {
+    tx_expr[matched] <- quant[matched]
+  }
+
+  # Sort: expressed descending, then NAs
+  tx_expr <- c(
+    sort(tx_expr[!is.na(tx_expr)], decreasing = TRUE),
+    tx_expr[is.na(tx_expr)]
+  )
+  tx_expr
+}
+
+
+#' Compute relative position of a site within its annotated feature
+#' @keywords internal
+compute_feature_proportions <- function(site, ols, feature_type, strand_val) {
+  if (strand_val == "*" || length(ols) == 0) {
+    fprop <- rep(NA_real_, length(feature_type))
+    names(fprop) <- names(feature_type)
+    return(fprop)
+  }
+
+  site_pos <- start(site)
+
+  vapply(seq_along(feature_type), function(j) {
+    tx_id <- names(feature_type)[j]
+    ft    <- feature_type[j]
+    feat  <- ols[ols$transcript_id == tx_id & ols$type == ft]
+
+    if (length(feat) == 0) return(NA_real_)
+
+    prop <- (site_pos - start(feat)) / (end(feat) - start(feat))
+    if (strand_val == "-") prop <- 1 - prop
+    mean(prop)
+  }, numeric(1), USE.NAMES = TRUE) -> fprop
+
+  names(fprop) <- names(feature_type)
+  fprop
+}
+
+
 
