@@ -1,17 +1,16 @@
-library(tidyverse)
 #' Extract count data from mpileup output
 #'
-#' Parses the output of the mpileup2bases perl script into a tidy
-#' per-sample list of base count tables.
+#' Parses the output of the RNAeditR_mpileup2bases.pl/RNAeditR_mpileup2bases_stranded.pl
+#' perl script into a tidy per-sample list of base count tables.
 #'
-#' @param dat Data frame read from baseCounts_from_mpileup.txt (no header).
+#' @param dat Data frame read from the outputs of RNAeditR_mpileup2bases.pl (no header).
 #'   Expected columns: chr, pos, ref, then per sample 4 columns (A, T, C, G)
 #'   or 8 columns if stranded (A, T, C, G, a, t, c, g).
 #' @param samp_names Character vector of sample names.
 #' @param stranded Logical. If TRUE, expects 8 columns per sample. Default FALSE.
 #'
 #' @return A named list of tibbles (one per sample), each with columns:
-#'   chr, pos, ref, site_id, A, T, C, G (and strand if stranded).
+#'   chr, pos, ref, A, T, C, G, site_id.
 #'
 #' @importFrom dplyr bind_cols mutate filter pull if_any all_of bind_rows
 #' @importFrom purrr map set_names reduce

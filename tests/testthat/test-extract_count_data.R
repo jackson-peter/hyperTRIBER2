@@ -9,6 +9,7 @@ mpileup_files <- list.files(test_path("testdata"), pattern = "txt$", full.names 
 cat("Files found:", length(mpileup_files), "\n")
 
 mpileup_df <- do.call(rbind, lapply(mpileup_files, read.table, header = FALSE))
+print(mpileup_df)
 cat("Dimensions:", dim(mpileup_df), "\n")
 
 samp_names <- c("R22", "R23", "R24", "R25", "R26", "R27",
@@ -18,10 +19,12 @@ samp_names <- c("R22", "R23", "R24", "R25", "R26", "R27",
 test_that("extract_count_data returns correct structure with real data", {
   result <- extract_count_data(mpileup_df, samp_names, stranded = FALSE)
 
+  # Result should be a names list by sample
   expect_type(result, "list")
-  expect_length(result, 12)
+  expect_length(result, 12) # number of samples
+  expect_equal(nrow(result[["R22"]]), 10) # number of sites
   expect_named(result, samp_names)
-  expect_equal(nrow(result[["R22"]]), 10)
+
   expect_true(all(c("A","T","C","G") %in% colnames(result[["R22"]])))
 })
 
