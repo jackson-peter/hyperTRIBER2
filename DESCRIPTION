@@ -1,11 +1,26 @@
 Package: hyperTRIBER2
-Title: What the Package Does (One Line, Title Case)
+Title: Differential RNA Editing Analysis
 Version: 0.0.0.9000
 Authors@R: 
-    person("First", "Last", , "first.last@example.com", role = c("aut", "cre"))
-Description: What the package does (one paragraph).
-License: `use_mit_license()`, `use_gpl3_license()` or friends to pick a
-    license
+    person("Jackson", "Peter", , "jackson.peter@bio.ku.dk", role = c("aut", "cre"))
+Description: Detects sites with significant differential RNA editing between conditions.
+License: use_gpl_license()
 Encoding: UTF-8
+Imports:
+    GenomicRanges,
+    IRanges,
+    S4Vectors,
+    GenomeInfoDb,
+    BiocGenerics,
+    DEXSeq,
+    dplyr,
+    purrr,
+    glue,
+    rlang,
+    doParallel,
+    foreach,
+    stats
+Suggests:
+    testthat
 Roxygen: list(markdown = TRUE)
 RoxygenNote: 7.3.3

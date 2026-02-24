@@ -9,6 +9,10 @@ hyperTRIBER2 is an R package for detecting sites with significant differential R
 ## Installation
 
 ```r
+if (!requireNamespace("BiocManager", quietly = TRUE))
+    install.packages("BiocManager")
+BiocManager::install(c("DEXSeq", "GenomicRanges", "BiocParallel"))
+
 library(devtools)
 install_github("jackson-peter/hyperTRIBER2")
 ```
