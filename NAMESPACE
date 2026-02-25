@@ -2,6 +2,8 @@
 
 export(annotate_with_genes)
 export(extract_count_data)
+export(get_hits)
+export(restrict_data)
 importFrom(dplyr,all_of)
 importFrom(dplyr,bind_cols)
 importFrom(dplyr,bind_rows)

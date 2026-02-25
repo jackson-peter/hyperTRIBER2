@@ -122,6 +122,7 @@ extract_count_data <- function(dat, samp_names, stranded = FALSE) {
 #' @param both_ways If TRUE, keep sites passing filters in either condition
 #' @param edits_of_interest Matrix of ref->target pairs to consider
 #' @return Filtered data_list
+#' @export
 restrict_data <- function(data_list,
                           ref_base = NULL,
                           design_vector,
@@ -393,6 +394,7 @@ editing_proportions_vs_reference <- function(data_list,
 #' @param ref_gr GRanges with ref column
 #' @param symmetric Logical, if TRUE use the "more edited" group for proportion
 #' @return GRanges of significant hits with metadata columns
+#' @export
 get_hits <- function(dexseq_res,
                      stranded = FALSE,
                      fdr = 0.1,
