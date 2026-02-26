@@ -627,10 +627,10 @@ annotate_with_genes <- function(pos_gr,
     # No annotation at all
     if (length(ols) == 0) {
       return(list(
-        info = c(gene = NA, name = NA, strand = "*",
-                 transcripts = NA, transcript_tpm = NA,
-                 transcript_types = NA, out_of_range = out_of_range),
-        fprop      = NA,
+        info = c(gene = NA_character_, name = NA_character_, strand = "*",
+                 transcripts = NA_character_, transcript_tpm = NA_character_,
+                 transcript_types = NA_character_, out_of_range = as.character(out_of_range)),
+        fprop      = NA_character_,
         new_strand = "*"
       ))
     }
