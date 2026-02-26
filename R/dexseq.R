@@ -39,9 +39,9 @@ generate_count_files <- function(data_list,
   control_idx <- which(design_vector == "control")
 
   write_counts <- function(indices, prefix) {
-    for (i in seq_along(indices)) {
-      k <- indices[i]
-      out_file <- file.path(out_dir, paste0("counts", prefix, i, ".txt"))
+    for (k in indices) {
+      samp_name <- names(counts_long)[k]
+      out_file <- file.path(out_dir, paste0("counts_", prefix, "_", samp_name, ".txt"))
       write.table(
         counts_long[[k]] |> tibble::column_to_rownames("row_id"),
         file = out_file,
@@ -49,6 +49,7 @@ generate_count_files <- function(data_list,
       )
     }
   }
+
 
   write_counts(treat_idx,   "Treat")
   write_counts(control_idx, "Control")
