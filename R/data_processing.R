@@ -499,11 +499,18 @@ compute_site_meta <- function(site_id, sig_res, data_list,
                               edits_of_interest, design_vector,
                               treat_idx, ctrl_idx, symmetric) {
 
-  # Stack all samples for this site
-  site_counts <- do.call(rbind, lapply(data_list, function(x) x[site_id, ]))
+  bases <- c("A", "T", "C", "G")
 
-  # Determine reference as dominant base
-  col_totals <- colSums(site_counts)
+  # Stack all samples for this site — index by site_id column, keep only base cols
+  site_counts <- do.call(rbind, lapply(data_list, function(x) {
+    row <- x[x$site_id == site_id, bases, drop = FALSE]
+    if (nrow(row) == 0) return(setNames(rep(NA_integer_, 4), bases))
+    row
+  }))
+  rownames(site_counts) <- names(data_list)
+
+  # Determine reference as dominant base (original behavior)
+  col_totals <- colSums(site_counts, na.rm = TRUE)
   ref <- names(which.max(col_totals))
 
   # Get significant hits for this site
@@ -511,8 +518,7 @@ compute_site_meta <- function(site_id, sig_res, data_list,
 
   # Resolve multiple edit types: keep only valid ref->target edits
   if (nrow(hit) > 1) {
-    valid_targets <- edits_of_interest[edits_of_interest[, 1] == ref, 2,
-                                       drop = FALSE]
+    valid_targets <- edits_of_interest[edits_of_interest[, 1] == ref, 2]
     hit_targets <- gsub("^E", "", hit$featureID)
     keep <- hit_targets %in% valid_targets
     hit <- hit[keep, , drop = FALSE]
@@ -527,20 +533,25 @@ compute_site_meta <- function(site_id, sig_res, data_list,
   targ <- gsub("^E", "", hit$featureID)
 
   # Editing proportions: target / (ref + target)
-  treat_ref  <- sum(site_counts[treat_idx, ref])
-  treat_targ <- sum(site_counts[treat_idx, targ])
-  ctrl_ref   <- sum(site_counts[ctrl_idx, ref])
-  ctrl_targ  <- sum(site_counts[ctrl_idx, targ])
+  treat_ref  <- sum(site_counts[treat_idx, ref],  na.rm = TRUE)
+  treat_targ <- sum(site_counts[treat_idx, targ], na.rm = TRUE)
+  ctrl_ref   <- sum(site_counts[ctrl_idx, ref],   na.rm = TRUE)
+  ctrl_targ  <- sum(site_counts[ctrl_idx, targ],  na.rm = TRUE)
   fc <- hit$log2fold_treat_control
 
   if (symmetric && fc < 0) {
-    # Swap: report the "more edited" group as prop
-    prop      <- ctrl_targ / (ctrl_ref + ctrl_targ)
+    prop      <- ctrl_targ  / (ctrl_ref + ctrl_targ)
     prop_ctrl <- treat_targ / (ctrl_ref + ctrl_targ)
   } else {
     prop      <- treat_targ / (treat_ref + treat_targ)
     prop_ctrl <- ctrl_targ  / (ctrl_ref + ctrl_targ)
   }
+
+  # Per-sample edit counts
+  edit_counts <- vapply(data_list, function(x) {
+    row <- x[x$site_id == site_id, targ, drop = TRUE]
+    if (length(row) == 0) NA_integer_ else row
+  }, numeric(1))
 
   data.frame(
     name         = site_id,
@@ -553,8 +564,8 @@ compute_site_meta <- function(site_id, sig_res, data_list,
     control_par  = hit$control,
     treat_par    = hit$treat,
     fold_change  = fc,
-    tags_treat   = sum(unlist(lapply(data_list, function(x) x[site_id, targ]))[treat_idx]),
-    tags_control = sum(unlist(lapply(data_list, function(x) x[site_id, targ]))[ctrl_idx]),
+    tags_treat   = sum(edit_counts[treat_idx], na.rm = TRUE),
+    tags_control = sum(edit_counts[ctrl_idx],  na.rm = TRUE),
     stringsAsFactors = FALSE
   )
 }
