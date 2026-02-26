@@ -10,6 +10,7 @@
 #' @param out_dir Output directory (created if needed)
 #' @param stranded Logical
 #' @return Invisibly returns the annotation tibble
+#' @export
 generate_count_files <- function(data_list,
                                  design_vector,
                                  out_dir,
@@ -115,6 +116,7 @@ generate_count_files <- function(data_list,
 #' @param fit_type Dispersion fit type passed to estimateDispersions()
 #' @param save_results Logical, whether to save .Rdat to out_dir
 #' @return DEXSeqResults object
+#' @export
 make_test <- function(out_dir,
                       design_vector,
                       n_cores = 1,
