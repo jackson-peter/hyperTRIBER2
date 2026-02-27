@@ -57,17 +57,6 @@ extract_count_data <- function(dat, samp_names, all_samp_names = NULL, stranded 
 
   dat <- dat[, cols_to_keep]
 
-
-  # -- Input validation --
-  expected_ncol <- n_meta_cols + (n_samples * cols_per_sample)
-  if (ncol(dat) != expected_ncol) {
-    stop(glue::glue(
-      "Column mismatch: expected {expected_ncol} ",
-      "({n_meta_cols} meta + {n_samples} samples x {cols_per_sample}), ",
-      "but got {ncol(dat)}."
-    ))
-  }
-
   message(glue::glue(
     "Selected {length(samp_names)}/{n_all_samples} samples from mpileup file."
   ))
