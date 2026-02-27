@@ -4,22 +4,22 @@
 \alias{extract_count_data}
 \title{Extract count data from mpileup output}
 \usage{
-extract_count_data(dat, samp_names, stranded = FALSE)
+extract_count_data(dat, samp_names, all_samp_names = NULL, stranded = FALSE)
 }
 \arguments{
-\item{dat}{Data frame read from the outputs of RNAeditR_mpileup2bases.pl (no header).
-Expected columns: chr, pos, ref, then per sample 4 columns (A, T, C, G)
-or 8 columns if stranded (A, T, C, G, a, t, c, g).}
+\item{dat}{Data frame read from the outputs of RNAeditR_mpileup2bases.pl (no header).}
 
-\item{samp_names}{Character vector of sample names.}
+\item{samp_names}{Character vector of sample names to extract (subset of all samples).}
+
+\item{all_samp_names}{Character vector of ALL sample names in the mpileup file,
+in the same order as the BAM list used for mpileup. If NULL, assumes dat
+contains exactly the samples in samp_names.}
 
 \item{stranded}{Logical. If TRUE, expects 8 columns per sample. Default FALSE.}
 }
 \value{
-A named list of tibbles (one per sample), each with columns:
-chr, pos, ref, A, T, C, G, site_id.
+A named list of tibbles (one per sample).
 }
 \description{
-Parses the output of the RNAeditR_mpileup2bases.pl/RNAeditR_mpileup2bases_stranded.pl
-perl script into a tidy per-sample list of base count tables.
+Extract count data from mpileup output
 }

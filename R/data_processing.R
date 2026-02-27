@@ -1,24 +1,16 @@
 #' Extract count data from mpileup output
 #'
-#' Parses the output of the RNAeditR_mpileup2bases.pl/RNAeditR_mpileup2bases_stranded.pl
-#' perl script into a tidy per-sample list of base count tables.
-#'
 #' @param dat Data frame read from the outputs of RNAeditR_mpileup2bases.pl (no header).
-#'   Expected columns: chr, pos, ref, then per sample 4 columns (A, T, C, G)
-#'   or 8 columns if stranded (A, T, C, G, a, t, c, g).
-#' @param samp_names Character vector of sample names.
+#' @param samp_names Character vector of sample names to extract (subset of all samples).
+#' @param all_samp_names Character vector of ALL sample names in the mpileup file,
+#'   in the same order as the BAM list used for mpileup. If NULL, assumes dat
+#'   contains exactly the samples in samp_names.
 #' @param stranded Logical. If TRUE, expects 8 columns per sample. Default FALSE.
 #'
-#' @return A named list of tibbles (one per sample), each with columns:
-#'   chr, pos, ref, A, T, C, G, site_id.
-#'
-#' @importFrom dplyr bind_cols mutate filter pull if_any all_of bind_rows
-#' @importFrom purrr map set_names reduce
-#' @importFrom glue glue
-#' @importFrom rlang set_names
+#' @return A named list of tibbles (one per sample).
 #'
 #' @export
-extract_count_data <- function(dat, samp_names, stranded = FALSE) {
+extract_count_data <- function(dat, samp_names, all_samp_names = NULL, stranded = FALSE) {
 
   # -- Constants --
   n_meta_cols     <- 3
