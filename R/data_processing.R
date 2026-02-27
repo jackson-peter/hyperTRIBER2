@@ -25,7 +25,46 @@ extract_count_data <- function(dat, samp_names, stranded = FALSE) {
   base_cols_fwd   <- c("A", "T", "C", "G")
   base_cols_rev   <- c("a", "t", "c", "g")
   cols_per_sample <- ifelse(stranded, 8, 4)
-  n_samples       <- length(samp_names)
+
+  # -- If all_samp_names not provided, assume dat matches samp_names --
+  if (is.null(all_samp_names)) {
+    all_samp_names <- samp_names
+  }
+
+  n_all_samples <- length(all_samp_names)
+
+  # -- Validate total columns against ALL samples --
+  expected_ncol <- n_meta_cols + (n_all_samples * cols_per_sample)
+  if (ncol(dat) != expected_ncol) {
+    stop(glue::glue(
+      "Column mismatch: expected {expected_ncol} ",
+      "({n_meta_cols} meta + {n_all_samples} samples x {cols_per_sample}), ",
+      "but got {ncol(dat)}."
+    ))
+  }
+
+  # -- Validate requested samples exist --
+  missing <- setdiff(samp_names, all_samp_names)
+  if (length(missing) > 0) {
+    stop(glue::glue(
+      "Samples not found in all_samp_names: {paste(missing, collapse = ', ')}"
+    ))
+  }
+
+  # -- Subset columns for requested samples only --
+  # Find indices of requested samples within the full sample list
+  samp_indices <- match(samp_names, all_samp_names)
+
+  cols_to_keep <- c(
+    1:n_meta_cols,
+    unlist(lapply(samp_indices, function(i) {
+      start <- n_meta_cols + (i - 1) * cols_per_sample + 1
+      start:(start + cols_per_sample - 1)
+    }))
+  )
+
+  dat <- dat[, cols_to_keep]
+
 
   # -- Input validation --
   expected_ncol <- n_meta_cols + (n_samples * cols_per_sample)
@@ -36,6 +75,13 @@ extract_count_data <- function(dat, samp_names, stranded = FALSE) {
       "but got {ncol(dat)}."
     ))
   }
+
+  message(glue::glue(
+    "Selected {length(samp_names)}/{n_all_samples} samples from mpileup file."
+  ))
+
+  n_samples <- length(samp_names)
+
 
   # -- Extract and name metadata --
   meta <- dat[, 1:n_meta_cols] |>
