@@ -21,12 +21,6 @@ install_github("jackson-peter/hyperTRIBER2")
 
 ### 1. Generate base pileup
 
-Before running the R package, generate base counts from your BAM files using `samtools mpileup` and the provided Perl script:
-
-```bash
-samtools mpileup --max-depth 50000 -Q 30 --skip-indels -f reference_genome.fa \
-  Samp1.bam Samp2.bam Samp3.bam | perl hyperTRIBE_mpileup2bases.pl > baseCounts.txt
-```
 
 ### 2. Run the pipeline
 
