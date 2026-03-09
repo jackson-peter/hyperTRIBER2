@@ -186,3 +186,97 @@ make_test <- function(out_dir,
 
   return(res)
 }
+
+#' GLM test for differential editing per site
+#'
+#' @param data_list Named list of sample data.frames (each with A, G, site_id columns)
+#' @param treat Character vector of treatment sample names
+#' @param control Character vector of control sample names
+#' @param family "quasibinomial" (default) or "betabinomial"
+#' @param min_coverage Minimum total A+G across all samples to test a site
+#' @return data.frame with site_id, logFC, pvalue, padj
+#' @export
+make_glm_test <- function(data_list,
+                          treat,
+                          control,
+                          family = "quasibinomial",
+                          min_coverage = 10) {
+
+  samples <- c(control, treat)
+  condition <- factor(c(rep("control", length(control)),
+                        rep("treat", length(treat))),
+                      levels = c("control", "treat"))
+
+  # Build G and A matrices (sites x samples)
+  G_mat <- do.call(cbind, lapply(samples, function(s) data_list[[s]]$G))
+  A_mat <- do.call(cbind, lapply(samples, function(s) data_list[[s]]$A))
+  site_ids <- data_list[[samples[1]]]$site_id
+
+  # Filter by coverage
+  total <- rowSums(G_mat + A_mat)
+  keep <- total >= min_coverage
+  G_mat <- G_mat[keep, , drop = FALSE]
+  A_mat <- A_mat[keep, , drop = FALSE]
+  site_ids <- site_ids[keep]
+
+  message("Testing ", sum(keep), " sites (filtered ", sum(!keep), " low-coverage)")
+
+  # Per-site GLM
+  n_sites <- nrow(G_mat)
+  pvals <- logFCs <- rep(NA_real_, n_sites)
+
+  if (family == "betabinomial") {
+    if (!requireNamespace("aod", quietly = TRUE)) stop("Install 'aod' for betabinomial")
+  }
+
+  for (i in seq_len(n_sites)) {
+    g <- G_mat[i, ]
+    a <- A_mat[i, ]
+
+    # Skip if no variance
+    if (sum(g) == 0 || sum(a) == 0) next
+
+    tryCatch({
+      if (family == "quasibinomial") {
+        fit <- glm(cbind(g, a) ~ condition, family = quasibinomial(link = "logit"))
+        coefs <- summary(fit)$coefficients
+        if (nrow(coefs) >= 2) {
+          logFCs[i] <- coefs[2, 1]
+          pvals[i]  <- coefs[2, 4]
+        }
+
+
+      # } else if (family == "betabinomial") {
+      #   df <- data.frame(g = g, n = g + a, condition = condition)
+      #   fit <- aod::betabin(cbind(g, n - g) ~ condition, ~ 1, data = df)
+      #   coefs <- summary(fit)@Coef
+      #   if (nrow(coefs) >= 2) {
+      #     logFCs[i] <- coefs[2, 1]
+      #     pvals[i]  <- coefs[2, 4]
+      #   }
+
+      } else if (family == "binomial") {
+        fit <- glm(cbind(g, a) ~ condition, family = binomial(link = "logit"))
+        coefs <- summary(fit)$coefficients
+        if (nrow(coefs) >= 2) {
+          logFCs[i] <- coefs[2, 1]
+          pvals[i]  <- coefs[2, 4]
+        }
+      }
+    }, error = function(e) NULL)
+  }
+
+  results <- data.frame(
+    site_id = site_ids,
+    logFC   = logFCs,
+    pvalue  = pvals,
+    padj    = p.adjust(pvals, method = "BH"),
+    stringsAsFactors = FALSE
+  )
+
+  message("Done. ", sum(!is.na(results$padj) & results$padj < 0.05, na.rm = TRUE),
+          " sites significant at FDR < 0.05")
+
+  return(results)
+}
+
