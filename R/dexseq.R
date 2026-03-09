@@ -225,9 +225,9 @@ make_glm_test <- function(data_list,
   n_sites <- nrow(G_mat)
   pvals <- logFCs <- rep(NA_real_, n_sites)
 
-  if (family == "betabinomial") {
-    if (!requireNamespace("aod", quietly = TRUE)) stop("Install 'aod' for betabinomial")
-  }
+  # if (family == "betabinomial") {
+  #   if (!requireNamespace("aod", quietly = TRUE)) stop("Install 'aod' for betabinomial")
+  # }
 
   for (i in seq_len(n_sites)) {
     g <- G_mat[i, ]
