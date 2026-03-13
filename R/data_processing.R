@@ -567,11 +567,11 @@ compute_site_meta <- function(site_id, sig_res, data_list,
   fc <- hit$log2fold_treat_control
 
   if (symmetric && fc < 0) {
-    prop      <- ctrl_targ  / (ctrl_ref + ctrl_targ)
-    prop_ctrl <- treat_targ / (ctrl_ref + ctrl_targ)
+    prop      <- ctrl_targ  / (ctrl_ref  + ctrl_targ)
+    prop_ctrl <- treat_targ / (treat_ref + treat_targ)
   } else {
     prop      <- treat_targ / (treat_ref + treat_targ)
-    prop_ctrl <- ctrl_targ  / (ctrl_ref + ctrl_targ)
+    prop_ctrl <- ctrl_targ  / (ctrl_ref  + ctrl_targ)
   }
 
   # Per-sample edit counts
