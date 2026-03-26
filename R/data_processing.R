@@ -90,7 +90,7 @@ extract_count_data <- function(dat, samp_names, all_samp_names = NULL, stranded 
       # Forward strand
       fwd <- dplyr::bind_cols(meta, sample_counts[, base_cols_fwd]) |>
         dplyr::mutate(strand = "+",
-                      site_id = paste0(chr, "_", pos, ",+"))
+                      site_id = paste0(chr, "_", as.integer(pos), ",+"))
 
       # Reverse strand: swap a<->t, c<->g
       rev_counts <- sample_counts[, c("t", "a", "g", "c")]
@@ -98,7 +98,7 @@ extract_count_data <- function(dat, samp_names, all_samp_names = NULL, stranded 
 
       rev <- dplyr::bind_cols(meta, rev_counts) |>
         dplyr::mutate(strand = "-",
-                      site_id = paste0(chr, "_", pos, ",-"))
+                      site_id = paste0(chr, "_", as.integer(pos), ",-"))
 
       dplyr::bind_rows(fwd, rev)
 
@@ -106,7 +106,7 @@ extract_count_data <- function(dat, samp_names, all_samp_names = NULL, stranded 
       colnames(sample_counts) <- base_cols_fwd
 
       dplyr::bind_cols(meta, sample_counts) |>
-        dplyr::mutate(site_id = paste0(chr, "_", pos))
+        dplyr::mutate(site_id = paste0(chr, "_", as.integer(pos)))
     }
   }) |>
     purrr::set_names(samp_names)
