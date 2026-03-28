@@ -330,7 +330,7 @@ parse_site_positions <- function(dnames, stranded = FALSE) {
   if (stranded) {
     data.frame(
       chr    = gsub("(.+)_[0-9]+,[-+]", "\\1", dnames),
-      pos    = as.numeric(gsub(".+_([0-9]+),[-+]", "\\1", dnames)),
+      pos    = as.integer(gsub(".+_([0-9]+),[-+]", "\\1", dnames)),
       strand = gsub(".+_[0-9]+,([-+])", "\\1", dnames),
       row.names = dnames,
       stringsAsFactors = FALSE
@@ -338,7 +338,7 @@ parse_site_positions <- function(dnames, stranded = FALSE) {
   } else {
     data.frame(
       chr = gsub("(.+)_[0-9]+", "\\1", dnames),
-      pos = as.numeric(gsub(".+_([0-9]+)", "\\1", dnames)),
+      pos = as.integer(gsub(".+_([0-9]+)", "\\1", dnames)),
       row.names = dnames,
       stringsAsFactors = FALSE
     )
@@ -352,7 +352,8 @@ lookup_reference_base <- function(pos_dat, ref_gr, stranded = FALSE) {
   names(ref_gr) <- paste(as.vector(GenomeInfoDb::seqnames(ref_gr)),
                          BiocGenerics::start(ref_gr), sep = "_")
 
-  keys <- paste(pos_dat$chr, pos_dat$pos, sep = "_")
+  pos_clean <- as.integer(as.numeric(pos_dat$pos))
+  keys <- paste(pos_dat$chr, pos_clean, sep = "_")
   ref_bases <- toupper(as.vector(ref_gr[keys]$ref))
 
   # Complement for minus strand
