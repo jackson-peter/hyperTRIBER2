@@ -111,6 +111,9 @@ extract_count_data <- function(dat, samp_names, all_samp_names = NULL, stranded 
   }) |>
     purrr::set_names(samp_names)
 
+  print(colnames(data_list[[1]]))
+  print("\test")
+
   # -- Remove sites with NA in any sample --
   na_sites <- data_list |>
     purrr::map(~ .x |>
