@@ -111,8 +111,6 @@ extract_count_data <- function(dat, samp_names, all_samp_names = NULL, stranded 
   }) |>
     purrr::set_names(samp_names)
 
-  print(colnames(data_list[[1]]))
-  print("\test")
 
   # -- Remove sites with NA in any sample --
   na_sites <- data_list |>
@@ -136,6 +134,7 @@ extract_count_data <- function(dat, samp_names, all_samp_names = NULL, stranded 
     "Extracted {n_samples} samples, {n_sites} sites each. ",
     "Stranded: {stranded}."
   ))
+  print(sum(duplicated(data_list[[1]]$site_id)))
 
   return(data_list)
 }
