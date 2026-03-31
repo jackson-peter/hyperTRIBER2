@@ -38,7 +38,12 @@ generate_count_files <- function(data_list,
   treat_idx   <- which(design_vector == "treat")
   control_idx <- which(design_vector == "control")
 
-  write_counts <- function(indices, prefix) {
+  print("test")
+  print(names(counts_long[[1]]))
+  print(head(counts_long[[1]]))
+
+  print("\test")
+  write_counts_old <- function(indices, prefix) {
     for (k in indices) {
       samp_name <- names(counts_long)[k]
       out_file <- file.path(out_dir, paste0("counts_", prefix, "_", samp_name, ".txt"))
@@ -49,6 +54,20 @@ generate_count_files <- function(data_list,
       )
     }
   }
+
+  write_counts <- function(indices, prefix) {
+    for (k in indices) {
+      samp_name <- names(counts_long)[k]
+      out_file <- file.path(out_dir, paste0("counts_", prefix, "_", samp_name, ".txt"))
+      df <- counts_long[[k]]
+      write.table(
+        df$count,
+        file = out_file,
+        col.names = FALSE, row.names = df$row_id, quote = FALSE, sep = "\t"
+      )
+    }
+  }
+
 
 
   write_counts(treat_idx,   "Treat")
