@@ -95,9 +95,11 @@ extract_count_data <- function(dat, samp_names, all_samp_names = NULL, stranded 
       # Reverse strand: swap a<->t, c<->g
       rev_counts <- sample_counts[, c("t", "a", "g", "c")]
       colnames(rev_counts) <- base_cols_fwd
+      comp <- c(A = "T", T = "A", C = "G", G = "C")
 
       rev <- dplyr::bind_cols(meta, rev_counts) |>
         dplyr::mutate(strand = "-",
+                      ref = comp[ref],
                       site_id = paste0(chr, "_", as.integer(pos), ",-"))
 
       dplyr::bind_rows(fwd, rev)
