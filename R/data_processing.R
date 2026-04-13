@@ -211,6 +211,8 @@ restrict_data <- function(data_list,
 
       # Site cannot be its own target (ref != target)
       not_target_ref <- ref_base != my_targ
+      is_correct_ref <- ref_base == my_ref
+
 
       if (!both_ways) {
         # WARNING HERE: original used >= 0 which is always TRUE for counts
@@ -219,7 +221,8 @@ restrict_data <- function(data_list,
         enough_reps  <- reps_with_editing >= min_samp_treat
         enough_count <- treat_targ_total >= min_count
 
-        not_target_ref & enough_reps & enough_count
+        #not_target_ref & enough_reps & enough_count #kept T-ref and C-ref sites that happen to have some G counts.
+        is_correct_ref & enough_reps & enough_count
 
       } else {
         # Treatment
@@ -230,7 +233,8 @@ restrict_data <- function(data_list,
         cont_reps    <- rowSums(cont_counts[[my_targ]] > 0) >= min_samp_treat
         cont_pass    <- cont_reps & (cont_targ_total >= min_count) & (prop_control > min_prop)
 
-        not_target_ref & (treat_pass | cont_pass)
+        #not_target_ref & (treat_pass | cont_pass)
+        is_correct_ref & (treat_pass | cont_pass)
       }
     })
 
