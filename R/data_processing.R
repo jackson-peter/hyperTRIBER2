@@ -67,7 +67,8 @@ extract_count_data<- function(dat, samp_names, all_samp_names = NULL, stranded =
   # -- Extract and name metadata --
   meta <- dat[, 1:n_meta_cols] |>
     rlang::set_names(c("chr", "pos", "ref")) |>
-    dplyr::mutate(pos = as.integer(pos), chr = as.character(chr), ref = as.character(ref))
+    dplyr::mutate(pos = as.integer(pos), chr = as.character(chr),
+                  ref = toupper(as.character(ref)))
 
   # -- Per-sample extraction --
   data_list <- purrr::map(seq_along(samp_names), function(i) {
@@ -92,14 +93,15 @@ extract_count_data<- function(dat, samp_names, all_samp_names = NULL, stranded =
         dplyr::mutate(strand = "+",
                       site_id = paste0(chr, "_", as.integer(pos), ",+"))
 
-      # Reverse strand: swap a<->t, c<->g
+      # Reverse strand: swap a<->t, c<->g, and complement ref so that the
+      # ref column is in the same orientation as the counts
       rev_counts <- sample_counts[, c("t", "a", "g", "c")]
       colnames(rev_counts) <- base_cols_fwd
-      #comp <- c(A = "T", T = "A", C = "G", G = "C")
+      comp <- c(A = "T", T = "A", C = "G", G = "C")
 
       rev <- dplyr::bind_cols(meta, rev_counts) |>
         dplyr::mutate(strand = "-",
-                      #ref = comp[ref],
+                      ref = unname(comp[ref]),
                       site_id = paste0(chr, "_", as.integer(pos), ",-"))
 
       dplyr::bind_rows(fwd, rev)
@@ -136,7 +138,6 @@ extract_count_data<- function(dat, samp_names, all_samp_names = NULL, stranded =
     "Extracted {n_samples} samples, {n_sites} sites each. ",
     "Stranded: {stranded}."
   ))
-  print(sum(duplicated(data_list[[1]]$site_id)))
 
   return(data_list)
 }
@@ -170,6 +171,7 @@ restrict_data <- function(data_list,
     ref_base <- data_list[[1]]$ref
     message("Using 'ref' column from first sample as ref_base.")
   }
+  ref_base <- toupper(ref_base)
 
   # -- Build count matrices per base per condition --
   # Each element is a sites x replicates matrix
@@ -429,7 +431,10 @@ editing_proportions_vs_reference <- function(data_list,
 #' @param include_ref Logical, add reference base annotation
 #' @param ref_gr GRanges with ref column
 #' @param symmetric Logical, if TRUE use the "more edited" group for proportion
-#' @return GRanges of significant hits with metadata columns
+#' @return GRanges of significant hits with metadata columns. `ref` is the
+#'   base carried by the samples (see [infer_site_ref()]); `base` is the genome
+#'   reference base (from `ref_gr`, else the `ref` column of `data_list`);
+#'   `snp` is TRUE when the two differ.
 #' @export
 get_hits <- function(dexseq_res,
                      stranded = FALSE,
@@ -477,12 +482,27 @@ get_hits <- function(dexseq_res,
   treat_idx  <- names(which(design_vector == "treat"))
   ctrl_idx   <- names(which(design_vector == "control"))
 
+  # Genome reference base per hit: from ref_gr if given, else the mpileup
+  # `ref` column. Used to flag SNPs and to break ties in infer_site_ref()
+  if (!is.null(ref_gr)) {
+    genome_ref <- lookup_reference_base(pos_dat, ref_gr, stranded)
+  } else if ("ref" %in% colnames(data_list[[1]])) {
+    genome_ref <- toupper(data_list[[1]]$ref[match(hit_ids, data_list[[1]]$site_id)])
+  } else {
+    genome_ref <- rep(NA_character_, length(hit_ids))
+  }
+  names(genome_ref) <- hit_ids
+
+  # Only hit sites are needed below; avoids rescanning all sites per hit
+  data_list <- lapply(data_list, function(x) x[x$site_id %in% hit_ids, , drop = FALSE])
+
   if (n_cores > 1) {
     doParallel::registerDoParallel(cores = n_cores)
     on.exit(doParallel::stopImplicitCluster(), add = TRUE)
     meta_list <- foreach::foreach(i = seq_along(pos_gr)) %dopar% {
       compute_site_meta(
         site_id            = names(pos_gr)[i],
+        genome_ref         = genome_ref[[i]],
         sig_res            = sig_res,
         data_list          = data_list,
         edits_of_interest  = edits_of_interest,
@@ -496,6 +516,7 @@ get_hits <- function(dexseq_res,
     meta_list <- lapply(seq_along(pos_gr), function(i) {
       compute_site_meta(
         site_id            = names(pos_gr)[i],
+        genome_ref         = genome_ref[[i]],
         sig_res            = sig_res,
         data_list          = data_list,
         edits_of_interest  = edits_of_interest,
@@ -509,9 +530,9 @@ get_hits <- function(dexseq_res,
 
   meta <- do.call(rbind, meta_list)
 
-  # -- 5. Optionally add reference base from GRanges ------------------------
-  if (include_ref && !is.null(ref_gr)) {
-    meta$base <- lookup_reference_base(pos_dat, ref_gr, stranded)
+  # -- 5. Optionally keep the genome reference base as `base` ---------------
+  if (include_ref) {
+    meta$base <- unname(genome_ref)
   }
 
   # -- 6. Attach metadata and filter self-edits -----------------------------
@@ -522,48 +543,109 @@ get_hits <- function(dexseq_res,
   pos_gr$ref  <- as.vector(pos_gr$ref)
   pos_gr$targ <- as.vector(pos_gr$targ)
 
-  # Remove sites where ref == target (not real edits)
-  pos_gr <- pos_gr[pos_gr$ref != pos_gr$targ]
+  # Remove sites without a usable edit (no valid target, or ref == target)
+  pos_gr <- pos_gr[which(pos_gr$ref != pos_gr$targ)]
 
   pos_gr
 }
 
 
+#' Infer the reference base carried by the samples at a site
+#'
+#' The reference is the most common base in the control samples, which carry
+#' little or no editing, so it reflects the genotype of the lines (correct at
+#' SNPs) and is not flipped by strong editing in treat. When the control and
+#' treat majority bases disagree (one group edited above 50%, e.g. FvF
+#' comparisons), the genome base decides if it matches either; otherwise the
+#' group whose base is the ref of a valid edit towards the other one wins.
+#'
+#' @param site_counts samples x bases count matrix for one site
+#' @param treat_idx,ctrl_idx Row indices (names or positions) of each group
+#' @param genome_ref Genome reference base, or NA
+#' @param edits_of_interest Matrix of ref->target pairs
+#' @return Single base
+#' @keywords internal
+infer_site_ref <- function(site_counts, treat_idx, ctrl_idx,
+                           genome_ref = NA_character_, edits_of_interest) {
+
+  majority <- function(idx) {
+    totals <- colSums(site_counts[idx, , drop = FALSE], na.rm = TRUE)
+    if (sum(totals) == 0) return(NA_character_)
+    names(which.max(totals))
+  }
+
+  ctrl_major  <- majority(ctrl_idx)
+  treat_major <- majority(treat_idx)
+  if (is.na(ctrl_major)) ctrl_major <- treat_major
+  if (is.na(treat_major)) treat_major <- ctrl_major
+  if (is.na(ctrl_major)) return(genome_ref)
+  if (ctrl_major == treat_major) return(ctrl_major)
+
+  if (!is.na(genome_ref) && genome_ref %in% c(ctrl_major, treat_major)) {
+    return(genome_ref)
+  }
+
+  edit_pairs <- paste(edits_of_interest[, 1], edits_of_interest[, 2])
+  if (!paste(ctrl_major, treat_major) %in% edit_pairs &&
+      paste(treat_major, ctrl_major) %in% edit_pairs) {
+    return(treat_major)
+  }
+  ctrl_major
+}
+
+
 #' Compute metadata for a single hit site
+#'
+#' @param genome_ref Genome reference base for the site, or NA. Used to flag
+#'   SNPs (`snp`) and to break ties in [infer_site_ref()].
 #' @keywords internal
 compute_site_meta <- function(site_id, sig_res, data_list,
                               edits_of_interest, design_vector,
-                              treat_idx, ctrl_idx, symmetric) {
+                              treat_idx, ctrl_idx, symmetric,
+                              genome_ref = NA_character_) {
 
   bases <- c("A", "T", "C", "G")
 
-  # Stack all samples for this site — index by site_id column, keep only base cols
-  site_counts <- do.call(rbind, lapply(data_list, function(x) {
+  # samples x bases count matrix for this site, indexed by the site_id column
+  site_counts <- t(vapply(data_list, function(x) {
     row <- x[x$site_id == site_id, bases, drop = FALSE]
-    if (nrow(row) == 0) return(setNames(rep(NA_integer_, 4), bases))
-    row
-  }))
-  rownames(site_counts) <- names(data_list)
+    if (nrow(row) == 0) return(rep(NA_real_, 4))
+    as.numeric(unlist(row[1, ]))
+  }, numeric(4)))
+  colnames(site_counts) <- bases
 
-  # Determine reference as dominant base (original behavior)
-  col_totals <- colSums(site_counts, na.rm = TRUE)
-  ref <- names(which.max(col_totals))
+  if (!isTRUE(genome_ref %in% bases)) genome_ref <- NA_character_
+  ref <- infer_site_ref(site_counts, treat_idx, ctrl_idx, genome_ref,
+                        edits_of_interest)
+  snp <- !is.na(genome_ref) && !is.na(ref) && ref != genome_ref
 
-  # Get significant hits for this site
+  # Get significant hits for this site; the ref base itself is not an edit
   hit <- sig_res[sig_res$groupID == site_id, , drop = FALSE]
+  hit_targets <- gsub("^E", "", hit$featureID)
+  not_ref <- !is.na(ref) & hit_targets != ref
+  hit <- hit[not_ref, , drop = FALSE]
+  hit_targets <- hit_targets[not_ref]
 
-  # Resolve multiple edit types: keep only valid ref->target edits
+  # Prefer valid ref->target edits when present
+  valid_targets <- edits_of_interest[edits_of_interest[, 1] == ref, 2]
+  if (any(hit_targets %in% valid_targets)) {
+    hit <- hit[hit_targets %in% valid_targets, , drop = FALSE]
+  }
+
+  if (nrow(hit) == 0) {
+    return(data.frame(
+      name = site_id, ref = ref, snp = snp, targ = NA_character_,
+      prop = NA_real_, prop_ctrl = NA_real_, padj = NA_real_, pvalue = NA_real_,
+      control_par = NA_real_, treat_par = NA_real_, fold_change = NA_real_,
+      tags_treat = NA_real_, tags_control = NA_real_,
+      stringsAsFactors = FALSE
+    ))
+  }
+
   if (nrow(hit) > 1) {
-    valid_targets <- edits_of_interest[edits_of_interest[, 1] == ref, 2]
-    hit_targets <- gsub("^E", "", hit$featureID)
-    keep <- hit_targets %in% valid_targets
-    hit <- hit[keep, , drop = FALSE]
-
-    if (nrow(hit) > 1) {
-      message(sprintf("Multiple edits at %s, selecting most significant",
-                      site_id))
-      hit <- hit[which.min(hit$pvalue), , drop = FALSE]
-    }
+    message(sprintf("Multiple edits at %s, selecting most significant",
+                    site_id))
+    hit <- hit[which.min(hit$pvalue), , drop = FALSE]
   }
 
   targ <- gsub("^E", "", hit$featureID)
@@ -575,7 +657,7 @@ compute_site_meta <- function(site_id, sig_res, data_list,
   ctrl_targ  <- sum(site_counts[ctrl_idx, targ],  na.rm = TRUE)
   fc <- hit$log2fold_treat_control
 
-  if (symmetric && fc < 0) {
+  if (symmetric && isTRUE(fc < 0)) {
     prop      <- ctrl_targ  / (ctrl_ref  + ctrl_targ)
     prop_ctrl <- treat_targ / (treat_ref + treat_targ)
   } else {
@@ -584,14 +666,13 @@ compute_site_meta <- function(site_id, sig_res, data_list,
   }
 
   # Per-sample edit counts
-  edit_counts <- vapply(data_list, function(x) {
-    row <- x[x$site_id == site_id, targ, drop = TRUE]
-    if (length(row) == 0) NA_integer_ else row
-  }, numeric(1))
+  edit_counts <- site_counts[, targ]
+  names(edit_counts) <- rownames(site_counts)
 
   data.frame(
     name         = site_id,
     ref          = ref,
+    snp          = snp,
     targ         = targ,
     prop         = prop,
     prop_ctrl    = prop_ctrl,
@@ -608,22 +689,32 @@ compute_site_meta <- function(site_id, sig_res, data_list,
 
 
 
-addStrandForHyperTRIBE <- function(posGR)
-{
-  strand <- rep("*",length(posGR))
-  strand[posGR$ref=="T" & posGR$targ=="C"] <- "-"
-  strand[posGR$ref=="A" & posGR$targ=="G"] <- "+"
-  strand(posGR) <- Rle(strand)
-  return(posGR)
+#' Assign transcript strand to unstranded sites from the ADAR edit type
+#'
+#' On unstranded data a genomic A>G is an A-to-I edit on a + strand
+#' transcript and T>C one on a - strand transcript. Sites that already carry
+#' a strand, or have another edit type, are left unchanged.
+#' @keywords internal
+addStrandForHyperTRIBE <- function(posGR) {
+  new_strand <- as.character(strand(posGR))
+  unstranded <- new_strand == "*"
+  new_strand[unstranded & posGR$ref == "T" & posGR$targ == "C"] <- "-"
+  new_strand[unstranded & posGR$ref == "A" & posGR$targ == "G"] <- "+"
+  strand(posGR) <- new_strand
+  posGR
 }
 
+#' Pick one annotation type per transcript from the overlapping features
+#'
+#' Flanked windows can span several feature types of a transcript, so the most
+#' specific one wins instead of erroring.
+#' @keywords internal
 handleAnoType <- function(x) {
+  priority <- c("CDS", "start_codon", "stop_codon", "5UTR", "3UTR", "exon")
   x_uniq <- unique(x)
-  # Remove redundant "exon" when a more specific type exists
-  specific <- intersect(x_uniq, c("3UTR", "5UTR", "CDS"))
-  if (length(specific) == 1) return(specific)
-  if (length(x_uniq) == 1) return(x_uniq)
-  stop("Ambiguous annotation types: ", paste(x_uniq, collapse = ", "))
+  known <- intersect(priority, x_uniq)
+  if (length(known) > 0) return(known[1])
+  x_uniq[1]
 }
 
 
@@ -667,7 +758,7 @@ annotate_with_genes <- function(pos_gr,
                  transcripts = NA_character_, transcript_tpm = NA_character_,
                  transcript_types = NA_character_, out_of_range = as.character(out_of_range)),
         fprop      = NA_character_,
-        new_strand = "*"
+        new_strand = as.character(strand(site))
       ))
     }
 
@@ -676,7 +767,7 @@ annotate_with_genes <- function(pos_gr,
     strands <- tapply(as.vector(strand(ols)), ols$gene_id, `[`, 1)
 
     if (length(genes) > 1) {
-      genes <- resolve_gene_ambiguity(genes, ols, pos_gr, quant)
+      genes <- resolve_gene_ambiguity(genes, ols, pos_gr, quant, gtf_gr)
       strands <- strands[genes]
       ols <- ols[ols$gene_id %in% genes]
     }
@@ -750,7 +841,7 @@ annotate_with_genes <- function(pos_gr,
 
 #' Resolve gene ambiguity when a site overlaps multiple genes
 #' @keywords internal
-resolve_gene_ambiguity <- function(genes, ols, pos_gr, quant) {
+resolve_gene_ambiguity <- function(genes, ols, pos_gr, quant, gtf_gr = ols) {
   # Primary: pick gene with most overlapping features to all sites
   overlap_counts <- vapply(genes, function(g) {
     length(findOverlaps(ols[ols$gene_id == g], pos_gr))
@@ -760,10 +851,10 @@ resolve_gene_ambiguity <- function(genes, ols, pos_gr, quant) {
     return(names(which.max(overlap_counts)))
   }
 
-  # Tiebreak: highest total expression
+  # Tiebreak: highest total expression over the gene's transcripts
   expr_sums <- vapply(genes, function(g) {
-    matched <- grep(g, names(quant))
-    if (length(matched) > 0) sum(quant[matched]) else 0
+    tx <- unique(gtf_gr$transcript_id[gtf_gr$gene_id == g])
+    sum(quant[intersect(tx, names(quant))])
   }, numeric(1))
 
   genes[which.max(expr_sums)]
@@ -812,7 +903,7 @@ compute_feature_proportions <- function(site, ols, feature_type, strand_val) {
 
     if (length(feat) == 0) return(NA_real_)
 
-    prop <- (site_pos - start(feat)) / (end(feat) - start(feat))
+    prop <- (site_pos - start(feat)) / pmax(end(feat) - start(feat), 1)
     if (strand_val == "-") prop <- 1 - prop
     mean(prop)
   }, numeric(1), USE.NAMES = TRUE) -> fprop

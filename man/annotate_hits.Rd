@@ -18,7 +18,8 @@ annotate_hits(posGR_list_filtered, design, txi, gtfGR, ids)
 \item{ids}{Named vector gene_id -> gene_symbol}
 }
 \value{
-Named list of annotated GRanges
+Named list of annotated GRanges. Unstranded A>G sites are only
+matched to + strand genes and T>C sites to - strand genes.
 }
 \description{
 Add gene annotations to filtered edit sites

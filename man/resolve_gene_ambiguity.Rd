@@ -4,7 +4,7 @@
 \alias{resolve_gene_ambiguity}
 \title{Resolve gene ambiguity when a site overlaps multiple genes}
 \usage{
-resolve_gene_ambiguity(genes, ols, pos_gr, quant)
+resolve_gene_ambiguity(genes, ols, pos_gr, quant, gtf_gr = ols)
 }
 \description{
 Resolve gene ambiguity when a site overlaps multiple genes

@@ -2,12 +2,24 @@
 # HyperTRIBE Pipeline
 # Usage:
 #   Rscript hyperTRIBER2_run.R path/to/hyperTRIBER2_config.R
+# The script ships with the package; locate it with
+#   system.file("scripts", "hyperTRIBER2_run.R", package = "hyperTRIBER2")
 # =============================================================================
+
+suppressPackageStartupMessages({
+  library(hyperTRIBER2)
+  library(readr)
+  library(dplyr)
+  library(tidyr)
+})
+
+`%||%` <- function(x, y) if (is.null(x)) y else x
 
 # ---- 0. Parse config path from command line  ----------------------
 args <- commandArgs(trailingOnly = TRUE)
 config_path <- if (length(args) >= 1) args[1] else "hyperTRIBER2_config.R"
 source(config_path)
+stranded <- config$stranded %||% FALSE
 
 message("=== HyperTRIBER pipeline: ", config$run_name, " ===")
 out_dir <- file.path(config$res_dir, config$run_name, "hyperTRIBER2")
@@ -33,7 +45,7 @@ gtfGR  <- annot$gtfGR
 ids    <- annot$ids
 
 # ---- 2.  count data -------------------------------------------------
-print("adar_cat_vec")
+message("ADAR expression category per sample:")
 print(adar_cat_vec)
 # Attach ADAR category to design
 design_df <- design_df %>%
@@ -48,12 +60,10 @@ all_samp_names <- readLines(bam_list_file) |>
   basename() |>
   stringr::str_remove("(_Aligned.sortedByCoord.out)?(_fwd|_rev)?\\.bam$")
 
-print(all_samp_names)
-
-print(unique(design_df$sample))
-print(all_samp_names)
-data_list_all <- extract_count_data(mpileup_df, unique_samp_names, all_samp_names, stranded = FALSE)
-refBase       <- locsGR[row.names(data_list_all[[1]])]$ref
+data_list_all <- extract_count_data(mpileup_df, unique_samp_names, all_samp_names,
+                                    stranded = stranded)
+# Genome ref base per row, in the same orientation as the counts
+refBase       <- data_list_all[[1]]$ref
 
 out <- build_design_and_restrict(
   design_df          = design_df,
@@ -84,12 +94,13 @@ design$data_list <- data_restricted_lists[design$experiment]
 
 # ---- 3. Generate DEXSeq count files ----------------------------------------
 
-write_count_files(data_restricted_lists, design_vectors, out_dir)
+write_count_files(data_restricted_lists, design_vectors, out_dir,
+                  stranded = stranded)
 
 # ---- 4. Run DEXSeq ----------------------------------------------------------
 
 dxd_list <- run_dexseq(design_vectors, out_dir,
-                        ncores = config$ncores_dexseq)
+                       ncores = config$ncores_dexseq, fdr = config$fdr)
 
 design$dxd_list <- dxd_list[design$experiment]
 
@@ -132,8 +143,9 @@ posGR_list <- call_hits(
   locsGR                = locsGR,
   edits_of_interest     = config$edits_of_interest,
   fdr                   = config$fdr,
-  symmetric = config$symmetric %||% FALSE,
-  ncores                = config$ncores_hits
+  symmetric             = config$symmetric %||% FALSE,
+  ncores                = config$ncores_hits,
+  stranded              = stranded
 )
 
 design$posGR <- posGR_list[design$experiment]

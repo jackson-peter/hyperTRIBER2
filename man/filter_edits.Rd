@@ -19,12 +19,13 @@ filter_edits(
 
 \item{ep_thresh}{Edit proportion threshold (default: 0.8)}
 
-\item{fc_thresh}{Fold change threshold (default: 0)}
+\item{fc_thresh}{Absolute log2 fold change threshold (default: 0)}
 
-\item{FvF}{Logical (default: FALSE)}
+\item{FvF}{Logical; if FALSE keep only sites more edited in treat (default: FALSE)}
 }
 \value{
-Filtered named list of GRanges
+Filtered named list of GRanges. Sites with NA proportion or fold
+change are dropped.
 }
 \description{
 Filter posGR list

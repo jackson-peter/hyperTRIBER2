@@ -32,10 +32,10 @@ test_that("generate_count_files creates expected output files", {
   generate_count_files(dl, design_vector = design, out_dir = tmpdir)
 
   expected_files <- c(
-    "countsTreat1.txt",
-    "countsTreat2.txt",
-    "countsControl1.txt",
-    "countsControl2.txt",
+    "counts_Treat_T1.txt",
+    "counts_Treat_T2.txt",
+    "counts_Control_C1.txt",
+    "counts_Control_C2.txt",
     "annotation_file_made_up_for_DEXSeq.gff"
   )
 
@@ -53,7 +53,7 @@ test_that("count files have correct number of rows (sites × 4 bases)", {
 
   generate_count_files(dl, design_vector = design, out_dir = tmpdir)
 
-  treat1 <- read.table(file.path(tmpdir, "countsTreat1.txt"),
+  treat1 <- read.table(file.path(tmpdir, "counts_Treat_T1.txt"),
                        header = FALSE, sep = "\t")
 
   # 3 sites × 4 bases = 12 rows
@@ -70,7 +70,7 @@ test_that("count file row names follow site_id:base format", {
 
   generate_count_files(dl, design_vector = design, out_dir = tmpdir)
 
-  treat1 <- read.table(file.path(tmpdir, "countsTreat1.txt"),
+  treat1 <- read.table(file.path(tmpdir, "counts_Treat_T1.txt"),
                        header = FALSE, sep = "\t",
                        row.names = 1)
 
@@ -93,7 +93,7 @@ test_that("count values match input data", {
 
   generate_count_files(dl, design_vector = design, out_dir = tmpdir)
 
-  treat1 <- read.table(file.path(tmpdir, "countsTreat1.txt"),
+  treat1 <- read.table(file.path(tmpdir, "counts_Treat_T1.txt"),
                        header = FALSE, sep = "\t",
                        row.names = 1)
 
@@ -101,7 +101,7 @@ test_that("count values match input data", {
   expect_equal(treat1["Chr1_100:G", 1], 5L)
   expect_equal(treat1["Chr2_300:C", 1], 80L)
 
-  ctrl1 <- read.table(file.path(tmpdir, "countsControl1.txt"),
+  ctrl1 <- read.table(file.path(tmpdir, "counts_Control_C1.txt"),
                       header = FALSE, sep = "\t",
                       row.names = 1)
 
@@ -191,12 +191,12 @@ test_that("samples are mapped to correct treat/control files", {
   generate_count_files(dl, design_vector = design, out_dir = tmpdir)
 
   # T2 has G=7 at site Chr1_100
-  treat2 <- read.table(file.path(tmpdir, "countsTreat2.txt"),
+  treat2 <- read.table(file.path(tmpdir, "counts_Treat_T2.txt"),
                        header = FALSE, sep = "\t", row.names = 1)
   expect_equal(treat2["Chr1_100:G", 1], 7L)
 
   # C2 has A=60 at site Chr1_100
-  ctrl2 <- read.table(file.path(tmpdir, "countsControl2.txt"),
+  ctrl2 <- read.table(file.path(tmpdir, "counts_Control_C2.txt"),
                       header = FALSE, sep = "\t", row.names = 1)
   expect_equal(ctrl2["Chr1_100:A", 1], 60L)
 })
@@ -225,7 +225,7 @@ test_that("output directory is created if it does not exist", {
   generate_count_files(dl, design_vector = design, out_dir = tmpdir)
 
   expect_true(dir.exists(tmpdir))
-  expect_true(file.exists(file.path(tmpdir, "countsTreat1.txt")))
+  expect_true(file.exists(file.path(tmpdir, "counts_Treat_T1.txt")))
 })
 
 # tests/testthat/test-dexseq.R
@@ -239,11 +239,9 @@ setup_fake_dexseq_dir <- function() {
   # Minimal count data
   counts <- data.frame(site = c("gene1:001", "gene1:002"), count = c(10L, 20L))
 
-  writeLines("countsControl1", file.path(tmpdir, "countsControl1.txt"))
-  writeLines("countsTreat1",   file.path(tmpdir, "countsTreat1.txt"))
-  write.table(counts, file.path(tmpdir, "countsControl1.txt"), sep = "\t",
+  write.table(counts, file.path(tmpdir, "counts_Control_C1.txt"), sep = "\t",
               row.names = FALSE, col.names = FALSE, quote = FALSE)
-  write.table(counts, file.path(tmpdir, "countsTreat1.txt"), sep = "\t",
+  write.table(counts, file.path(tmpdir, "counts_Treat_T1.txt"), sep = "\t",
               row.names = FALSE, col.names = FALSE, quote = FALSE)
 
   writeLines("Chr1\tDARESS\texonic_part\t100\t100\t.\t+\t.\tgene_id gene1; exonic_part_number 001",

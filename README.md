@@ -18,11 +18,9 @@ BiocManager::install(c(
   "GenomicRanges",
   "BiocParallel",
   "rtracklayer",
-  "tximport",
-  "dplyr",
-  "purrr",
-  "tidyverse"
+  "tximport"
 ))
+install.packages(c("dplyr", "purrr", "tidyr", "readr", "glue", "doParallel", "foreach"))
 
 # Install hyperTRIBER2 package
 devtools::install_github("jackson-peter/hyperTRIBER2")
@@ -35,7 +33,10 @@ hyperTRIBER2 provides a complete pipeline for differential RNA editing analysis:
  - Data Loading: Import and preprocess data from Salmon quantification and mpileup files
  - Site Calling: Identify significant editing sites using DEXSeq
  - Filtering: Apply quality filters to editing sites
- - Annotation: Add gene and transcript annotations to significant sites
+ - Annotation: Add gene and transcript annotations to significant sites. For unstranded
+   data, A>G sites are matched only to + strand genes and T>C sites only to − strand genes
+   (A-to-I on the transcript); sites with no gene on the matching strand get `gene = NA`.
+   Gene symbols come from the GFF `symbol` attribute, else `Name`, else the gene ID.
 
 ## Quick start
 
@@ -45,7 +46,20 @@ The following files are required:
  - Salmon quantification files: Output from running Salmon on RNA data
  - Mpileup files: Base-level counts from sequencing data
  - Reference annotation: GTF/GFF files
- - Design file: A table describing samples and experimental conditions
+ - Design file: a TSV with one row per sample and experiment, with columns
+   `sample` (matching the salmon `<sample>_quant/` folders and the BAM names in
+   `mpileup_dir/bam_list.txt`), `experiment` (samples are compared within each
+   experiment) and `condition` (`control` or `treat`)
+
+Example design table:
+
+```
+sample	experiment	condition
+R22	FvC	control
+R23	FvC	control
+R24	FvC	treat
+R25	FvC	treat
+```
 
 ### 2. Configuration file
 
@@ -69,7 +83,8 @@ config <- list(
   gtf_file     = "path/to/your/reference/annotation.gtf",
   gff_file     = "path/to/your/reference/annotation.gff",
 
-  FvF = FALSE,
+  FvF      = FALSE,   # FALSE: keep only sites more edited in treat
+  stranded = FALSE,   # TRUE only for 8-column-per-sample (strand-split) mpileup
 
   # --- ADAR transgene name in the salmon quantification matrix ---
   adar_tx_name = "ADARclone",
@@ -114,9 +129,11 @@ config <- list(
 
 ### 3. Run the pipeline
 
+The pipeline script is installed with the package; a template config is next to it
+(`inst/scripts/config_example.R` in this repository).
+
 ```bash
-# Run the pipeline script
-Rscript hyperTRIBER2_run.R hyperTRIBER2_config.R
+Rscript "$(Rscript -e 'cat(system.file("scripts", "hyperTRIBER2_run.R", package = "hyperTRIBER2"))')" hyperTRIBER2_config.R
 ```
 
 ## Key Functions
@@ -143,28 +160,39 @@ annot <- load_annotations(
 ```
 
 ### Site Analysis
-```
-# Restrict data to sites of interest
-analysis_data <- prepare_analysis(
-  data_list_all = data_list,
-  design_lists = design_lists,
-  refBase = "A",
-  min_samp_treat = 2,
-  min_count = 5,
-  min_prop = 0.0,
-  both_ways = TRUE,
-  edits_of_interest = c("A", "G")
+```R
+edits <- rbind(c("A", "G"), c("T", "C"))   # ref -> target matrix
+
+# Per-sample base counts from the mpileup table
+data_list_all <- extract_count_data(mp_data$mpileup_df, samp_names, all_samp_names)
+
+# Build per-experiment design vectors and restrict to candidate sites
+restricted <- build_design_and_restrict(
+  design_df         = design_df,
+  data_list_all     = data_list_all,
+  refBase           = data_list_all[[1]]$ref,
+  edits_of_interest = edits,
+  min_samp_treat    = 2,
+  min_count         = 5,
+  min_prop          = 0.0,
+  both_ways         = TRUE
 )
+design_vectors        <- restricted$design_vectors
+data_restricted_lists <- restricted$data_restricted_lists
+
+# DEXSeq test per experiment
+write_count_files(data_restricted_lists, design_vectors, res_dir)
+dxd_list <- run_dexseq(design_vectors, res_dir, ncores = 10)
 
 # Call significant editing sites
 posGR_list <- call_hits(
-  dxd_list = dxd_list,
-  design_vectors = design_vectors,
+  dxd_list              = dxd_list,
+  design_vectors        = design_vectors,
   data_restricted_lists = data_restricted_lists,
-  locsGR = locsGR,
-  edits_of_interest = c("A", "G"),
-  fdr = 0.1,
-  ncores = 40
+  locsGR                = mp_data$locsGR,
+  edits_of_interest     = edits,
+  fdr                   = 0.1,
+  ncores                = 40
 )
 
 # Filter editing sites
@@ -198,7 +226,7 @@ save_checkpoint(
 ```
 
 ### Example Usage
-For a complete pipeline example, see the hyperTRIBER2_run.R script in the package repository. This script demonstrates the full workflow from data loading to final annotation.
+For a complete pipeline example, see `inst/scripts/hyperTRIBER2_run.R`. This script demonstrates the full workflow from data loading to final annotation.
 
 
 ### Configuration Parameters Explained
@@ -210,16 +238,18 @@ For a complete pipeline example, see the hyperTRIBER2_run.R script in the packag
  - gtf_file: Path to GTF annotation file &rarr; "path/to/your/reference/annotation.gtf"
  - gff_file: Path to GFF annotation file &rarr; "path/to/your/reference/annotation.gff"
  - adar_tx_name: Name of ADAR transgene in Salmon quantification &rarr; "ADARclone"
- - min_samp_treat: Minimum number of samples with editing in treatment group &rarr; 2
- - min_count: Minimum total count for a site to be considered &rarr; 5
- - min_prop: Minimum proportion threshold for editing detection &rarr; 0.0
- - both_ways: Whether to test both directions of each edit type &rarr; TRUE
+ - FvF: If FALSE, keep only sites more edited in treat than control &rarr; FALSE
+ - stranded: Whether the mpileup has strand-split counts (8 columns per sample) &rarr; FALSE
+ - min_samp_treat: Minimum number of replicates with at least one edited read (applied per condition) &rarr; 2
+ - min_count: Minimum total edited-base (target) read count across replicates &rarr; 5
+ - min_prop: Minimum editing proportion, used when both_ways = TRUE &rarr; 0.0
+ - both_ways: Keep sites passing the filters in either condition, not only in treat &rarr; TRUE
  - fdr: False discovery rate threshold for significance &rarr; 0.1
  - ncores_dexseq: Number of cores for DEXSeq analysis &rarr; 10
  - ncores_hits: Number of cores for hit calling &rarr; 40
  - edits_of_interest: All substitution types to consider initially &rarr; All 12 types
  - keep_edit_pairs: Edit types to keep after initial filtering &rarr; c("A G", "T C")
- - fc_thresh: Fold change threshold for filtering &rarr; 1
- - ep_thresh: Editing proportion threshold for filtering &rarr; 0.8
+ - fc_thresh: Minimum absolute DEXSeq log2 fold change &rarr; 1
+ - ep_thresh: Sites with treat editing proportion at or above this are removed (likely SNPs) &rarr; 0.8
  - keep_gtf_types: GTF feature types to use for annotation &rarr; c("3UTR", "5UTR", "CDS", "exon", ...)
 
