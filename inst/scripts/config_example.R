@@ -5,17 +5,20 @@
 config <- list(
   
   # --- Run identity ---
-  run_name = "hyperTRIBER2_FirstRound_F2C_TESTING",   # used for logging/messages
+  run_name = "hyperTRIBER2_example_run",   # used for logging/messages
   
   # --- Paths ---
-  design_file  = "/projects/renlab/people/qgr178/Projects/AGO1/Scripts/FirstRound/AGO1_design_table.tsv",
-  res_dir      = "/maps/projects/renlab/people/qgr178/Projects/AGO1/FirstRound/Results",
-  mpileup_dir  = "/projects/renlab/people/qgr178/Projects/AGO1/FirstRound/Results/variant/mpileup/",
-  salmon_dir   = "/projects/renlab/people/qgr178/Projects/AGO1/FirstRound/Results/quantification/salmon/",
-  gtf_file     = "/maps/projects/renlab/people/qgr178/Shared/Reference/A_thaliana/Araport11/Araport11_GTF_genes_transposons.20241001.gtf",
-  gff_file     = "/maps/projects/renlab/people/qgr178/Shared/Reference/A_thaliana/Araport11/Araport11_GFF3_genes_transposons.20250813.gff",
+  design_file  = "path/to/your/design_table.tsv",
+  res_dir      = "path/to/your/results_directory",
+  mpileup_dir  = "path/to/your/mpileup/output",
+  salmon_dir   = "path/to/your/salmon/quantification",
+  gtf_file     = "path/to/your/reference/annotation.gtf",
+  gff_file     = "path/to/your/reference/annotation.gff",
   
-  FvF=FALSE,
+  # --- Design ---
+  # Design table (TSV) columns: sample, experiment, condition ("control"/"treat")
+  FvF      = FALSE,   # FALSE: keep only sites more edited in treat
+  stranded = FALSE,   # TRUE only for 8-column-per-sample (strand-split) mpileup
 
   # --- ADAR transgene name in the salmon quantification matrix ---
   adar_tx_name = "ADARclone",

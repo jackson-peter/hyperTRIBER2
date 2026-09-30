@@ -529,7 +529,7 @@ make_fake_dexseq_res <- function() {
 make_fake_data_list <- function() {
   sites <- c("chr1_100", "chr1_200", "chr1_300")
   make_sample <- function(a, t, c, g) {
-    df <- data.frame(A = a, T = t, C = c, G = g)
+    df <- data.frame(A = a, T = t, C = c, G = g, site_id = sites)
     row.names(df) <- sites
     df
   }
@@ -672,10 +672,10 @@ test_that("compute_site_meta symmetric mode swaps on negative FC", {
 
   # Control samples have high G, treat samples have low G
   dl <- list(
-    S1 = data.frame(A = 80, T = 5, C = 5, G = 10, row.names = "chr1_100"),
-    S2 = data.frame(A = 85, T = 5, C = 5, G = 5,  row.names = "chr1_100"),
-    S3 = data.frame(A = 40, T = 5, C = 5, G = 50, row.names = "chr1_100"),
-    S4 = data.frame(A = 30, T = 5, C = 5, G = 60, row.names = "chr1_100")
+    S1 = data.frame(A = 80, T = 5, C = 5, G = 10, site_id = "chr1_100", row.names = "chr1_100"),
+    S2 = data.frame(A = 85, T = 5, C = 5, G = 5,  site_id = "chr1_100", row.names = "chr1_100"),
+    S3 = data.frame(A = 40, T = 5, C = 5, G = 50, site_id = "chr1_100", row.names = "chr1_100"),
+    S4 = data.frame(A = 30, T = 5, C = 5, G = 60, site_id = "chr1_100", row.names = "chr1_100")
   )
   dv <- c(S1 = "treat", S2 = "treat", S3 = "control", S4 = "control")
 
@@ -770,7 +770,7 @@ test_that("get_hits filters to edits of interest only", {
   dl <- make_fake_data_list()
   # Add site to data_list
   dl <- lapply(dl, function(x) {
-    new_row <- data.frame(A = 5, T = 50, C = 10, G = 0)
+    new_row <- data.frame(A = 5, T = 50, C = 10, G = 0, site_id = "chr1_400")
     row.names(new_row) <- "chr1_400"
     rbind(x, new_row)
   })
@@ -901,23 +901,15 @@ test_that("site on different chromosome returns empty annotation", {
   site <- GRanges("chr2", IRanges(150, width = 1), strand = "+")
   site$names <- "nowhere_site"
 
-  # Function has a known issue with no-hit sites; verify it doesn't silently
+  res <- suppressWarnings(annotate_with_genes(site, gtf, gids, quant, n_cores = 1))
 
-  # return wrong data. Accept either an error or an empty gene annotation.
-  res <- tryCatch(
-    suppressWarnings(annotate_with_genes(site, gtf, gids, quant, n_cores = 1)),
-    error = function(e) NULL
-  )
-
-  if (!is.null(res)) {
-    # If it returns something, gene should be empty or NA
-    expect_true(unname(res$gene) %in% c("", NA_character_))
-  } else {
-    succeed("Function errored on no-overlap site (known limitation)")
-  }
+  expect_true(is.na(res$gene))
+  expect_true(res$out_of_range)
+  # Site keeps its own strand when no gene is found
+  expect_equal(as.character(strand(res)), "+")
 })
-test_that("gene disambiguation picks gene by GTF order", {
-  # When two genes overlap same position, function picks by GTF order (first gene wins)
+test_that("gene disambiguation breaks ties by transcript expression", {
+  # Both genes overlap the site equally; the more expressed one wins
   gtf <- GRanges(
     seqnames = rep("chr1", 4),
     ranges = IRanges(start = c(100, 100, 100, 100), end = c(200, 200, 200, 200)),
@@ -935,24 +927,7 @@ test_that("gene disambiguation picks gene by GTF order", {
 
   res <- annotate_with_genes(site, gtf, gids, quant, n_cores = 1)
 
-  # First gene in GTF wins regardless of expression
-  expect_equal(unname(res$gene), "WINNER")
-})
-
-test_that("site on different chromosome returns empty annotation", {
-  gtf   <- make_test_gtf()
-  quant <- make_test_quant()
-  gids  <- make_test_gene_ids()
-
-  site <- GRanges("chr2", IRanges(150, width = 1), strand = "+")
-  site$names <- "nowhere_site"
-
-  # Function crashes on no-overlap sites (vapply type mismatch) — this is a
-
-  # known limitation. Just verify it errors rather than returning wrong data.
-  expect_error(
-    suppressWarnings(annotate_with_genes(site, gtf, gids, quant, n_cores = 1))
-  )
+  expect_equal(unname(res$gene), "LOSER")
 })
 
 test_that("multiple sites processed together return correct length", {

@@ -4,9 +4,12 @@ Version: 0.0.0.9000
 Authors@R: 
     person("Jackson", "Peter", , "jackson.peter@bio.ku.dk", role = c("aut", "cre"))
 Description: Detects sites with significant differential RNA editing between conditions.
-License: use_gpl_license()
+License: GPL (>= 3)
 Encoding: UTF-8
+Depends:
+    R (>= 4.1.0)
 Imports:
+    BiocParallel,
     GenomicRanges,
     IRanges,
     S4Vectors,
@@ -15,12 +18,17 @@ Imports:
     DEXSeq,
     dplyr,
     purrr,
+    tidyr,
+    tximport,
+    rtracklayer,
     glue,
     rlang,
     doParallel,
     foreach,
-    stats
+    stats,
+    utils
 Suggests:
-    testthat
+    testthat (>= 3.0.0),
+    withr
 Roxygen: list(markdown = TRUE)
 Config/roxygen2/version: 8.0.0

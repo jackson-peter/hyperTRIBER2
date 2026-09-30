@@ -4,7 +4,7 @@
 \alias{run_dexseq}
 \title{Run DEXSeq (make_test) for all experiments}
 \usage{
-run_dexseq(design_vectors, res_dir, ncores = 10)
+run_dexseq(design_vectors, res_dir, ncores = 10, fdr = 0.1)
 }
 \arguments{
 \item{design_vectors}{Named list of named condition vectors}
@@ -12,6 +12,8 @@ run_dexseq(design_vectors, res_dir, ncores = 10)
 \item{res_dir}{Top-level results directory}
 
 \item{ncores}{Number of cores for DEXSeq (default: 10)}
+
+\item{fdr}{FDR threshold used only for the progress message (default: 0.1)}
 }
 \value{
 Named list of DEXSeq result objects

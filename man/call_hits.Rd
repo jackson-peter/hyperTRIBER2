@@ -12,7 +12,8 @@ call_hits(
   edits_of_interest,
   fdr = 0.1,
   symmetric = FALSE,
-  ncores = 40
+  ncores = 40,
+  stranded = FALSE
 )
 }
 \arguments{
@@ -31,6 +32,8 @@ call_hits(
 \item{symmetric}{Logical (default: FALSE)}
 
 \item{ncores}{Cores for getHits (default: 40)}
+
+\item{stranded}{Logical (default: FALSE)}
 }
 \value{
 Named list of GRanges with edit sites

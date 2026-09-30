@@ -26,7 +26,7 @@ load_salmon <- function(salmon_dir, design, sample_col = "sample", quant_suffix=
   dir_names <- basename(dirname(quant_files))
   samp_names <- sub("_quant$", "", dir_names)
 
-  named_files <- setNames(quant_files, samp_names)
+  named_files <- stats::setNames(quant_files, samp_names)
   # Filter to only include samples in design
   named_files <- named_files[names(named_files) %in% valid_samples]
 
@@ -36,25 +36,13 @@ load_salmon <- function(salmon_dir, design, sample_col = "sample", quant_suffix=
     stop("Missing salmon files for samples in design: ", paste(missing_samples, collapse = ", "))
   }
 
-  # Import with tximport using only matching files
-  txi <- tximport(
+  # Import in design order (a sample may appear in several experiments)
+  named_files <- named_files[unique(valid_samples)]
+  txi <- tximport::tximport(
     files = named_files,
     type = "salmon",
     txOut = TRUE
   )
-
-  # Verify order matches design file order
-  design_order <- names(named_files) %in% valid_samples
-  if (any(is.na(design_order))) {
-    stop("Internal error: sample matching failed")
-  }
-
-  # Reorder to match design file
-  txi$counts <- txi$counts[, design_order]
-  if (!is.null(txi$abundance)) txi$abundance <- txi$abundance[, design_order]
-  if (!is.null(txi$length)) txi$length <- txi$length[, design_order]
-  cat("Available samples in directory:", paste(sort(unique(samp_names)), collapse = ", "), "\n")
-  cat("Requested samples from design:", paste(sort(valid_samples), collapse = ", "), "\n")
 
   message("Successfully loaded ", length(named_files), " samples matching design file")
   txi
@@ -94,12 +82,14 @@ load_mpileup <- function(mpileup_dir) {
   if (length(files) == 0)
     stop("No mpileup output files found in: ", mpileup_dir)
 
-  df <- do.call(rbind, lapply(files, read.table, header = FALSE))
+  df <- do.call(rbind, lapply(files, utils::read.table, header = FALSE,
+                              colClasses = c(V1 = "character", V3 = "character")))
+  df$V3 <- toupper(df$V3)
   rownames(df) <- paste(df[[1]], df[[2]], sep = "_")
 
-  locsGR <- GRanges(
-    seqnames = Rle(df$V1),
-    ranges   = IRanges(df$V2, width = 1),
+  locsGR <- GenomicRanges::GRanges(
+    seqnames = S4Vectors::Rle(df$V1),
+    ranges   = IRanges::IRanges(df$V2, width = 1),
     ref      = df$V3,
     names    = paste(df$V1, "_", df$V2, sep = "")
   )
@@ -121,17 +111,23 @@ load_annotations <- function(gtf_file, gff_file,
                                                 "start_codon","stop_codon")) {
 
   gtf    <- rtracklayer::import(gtf_file)
-  gtfGR  <- gtf[mcols(gtf)$type %in% keep_gtf_types]
+  gtfGR  <- gtf[S4Vectors::mcols(gtf)$type %in% keep_gtf_types]
 
   gff    <- rtracklayer::import(gff_file)
   genes  <- gff[gff$type == "gene"]
 
-  gene_annot <- as.data.frame(mcols(genes))[, c("ID", "symbol")]
-  gene_annot$symbol[is.na(gene_annot$symbol)] <-
-    gene_annot$ID[is.na(gene_annot$symbol)]
-  colnames(gene_annot) <- c("gene_id", "gene_symbol")
+  # Gene symbol from `symbol` (Araport), else `Name`, else the gene ID
+  gene_meta <- S4Vectors::mcols(genes)
+  gene_id   <- as.character(gene_meta$ID)
+  symbol_col <- intersect(c("symbol", "Name"), colnames(gene_meta))
+  gene_symbol <- if (length(symbol_col) > 0) {
+    as.character(gene_meta[[symbol_col[1]]])
+  } else {
+    gene_id
+  }
+  gene_symbol[is.na(gene_symbol)] <- gene_id[is.na(gene_symbol)]
 
-  ids <- setNames(gene_annot$gene_symbol, gene_annot$gene_id)
+  ids <- stats::setNames(gene_symbol, gene_id)
 
   message("Annotations: ", length(gtfGR), " GTF features | ",
           length(genes), " genes in GFF")
@@ -160,16 +156,22 @@ build_design_and_restrict <- function(design_df,
                                       min_prop       = 0.0,
                                       both_ways      = TRUE) {
 
-  design_lists <- design_df %>%
-    group_by(experiment) %>%
-    summarise(
-      design = list(setNames(condition, sample)),
+  bad_cond <- setdiff(unique(design_df$condition), c("control", "treat"))
+  if (length(bad_cond) > 0) {
+    stop("design condition must be 'control' or 'treat', found: ",
+         paste(bad_cond, collapse = ", "))
+  }
+
+  design_lists <- design_df |>
+    dplyr::group_by(experiment) |>
+    dplyr::summarise(
+      design = list(stats::setNames(condition, sample)),
       .groups = "drop"
     )
 
-  design_vectors <- setNames(design_lists$design, design_lists$experiment)
+  design_vectors <- stats::setNames(design_lists$design, design_lists$experiment)
 
-  data_restricted_lists <- imap(
+  data_restricted_lists <- purrr::imap(
     design_vectors,
     ~ restrict_data(
       data_list          = data_list_all[names(.x)],
@@ -192,12 +194,14 @@ build_design_and_restrict <- function(design_df,
 #' @param data_restricted_lists Named list from restrict_data()
 #' @param design_vectors Named list of named condition vectors
 #' @param res_dir Top-level results directory
+#' @param stranded Logical (default: FALSE)
 #' @export
 write_count_files <- function(data_restricted_lists,
                               design_vectors,
-                              res_dir) {
+                              res_dir,
+                              stranded = FALSE) {
 
-  iwalk(
+  purrr::iwalk(
     data_restricted_lists,
     function(data_list, exper) {
       out <- file.path(res_dir, exper, "results")
@@ -207,7 +211,7 @@ write_count_files <- function(data_restricted_lists,
         data_list     = data_list,
         design_vector = design_vectors[[exper]],
         out_dir       = out,
-        stranded      = FALSE
+        stranded      = stranded
       )
       message("Count files written for: ", exper)
     }
@@ -218,29 +222,24 @@ write_count_files <- function(data_restricted_lists,
 #' @param design_vectors Named list of named condition vectors
 #' @param res_dir Top-level results directory
 #' @param ncores Number of cores for DEXSeq (default: 10)
+#' @param fdr FDR threshold used only for the progress message (default: 0.1)
 #' @return Named list of DEXSeq result objects
 #' @export
-run_dexseq <- function(design_vectors, res_dir, ncores = 10) {
+run_dexseq <- function(design_vectors, res_dir, ncores = 10, fdr = 0.1) {
 
-  imap(
+  purrr::imap(
     design_vectors,
     function(design_vec, exper) {
       message("Running DEXSeq for: ", exper)
 
-      # controls first, then treated — required by make_test
-      design_vec_fixed <- design_vec[
-        c(names(design_vec)[design_vec == "control"],
-          names(design_vec)[design_vec == "treat"])
-      ]
-
       dxd_res <- make_test(
         out_dir       = file.path(res_dir, exper, "results"),
-        design_vector = design_vec_fixed,
+        design_vector = design_vec,
         n_cores       = ncores
       )
 
-      n_sig <- sum(dxd_res$padj < 0.1, na.rm = TRUE)
-      message("  -> ", n_sig, " sites with padj < 0.1 in ", exper)
+      n_sig <- sum(dxd_res$padj < fdr, na.rm = TRUE)
+      message("  -> ", n_sig, " sites with padj < ", fdr, " in ", exper)
 
       dxd_res
     }
@@ -256,6 +255,7 @@ run_dexseq <- function(design_vectors, res_dir, ncores = 10) {
 #' @param fdr FDR threshold (default: 0.1)
 #' @param symmetric Logical (default: FALSE)
 #' @param ncores Cores for getHits (default: 40)
+#' @param stranded Logical (default: FALSE)
 #' @return Named list of GRanges with edit sites
 #' @export
 call_hits <- function(dxd_list,
@@ -265,16 +265,17 @@ call_hits <- function(dxd_list,
                       edits_of_interest,
                       fdr = 0.1,
                       symmetric = FALSE,
-                      ncores = 40) {
+                      ncores = 40,
+                      stranded = FALSE) {
 
-  imap(
+  purrr::imap(
     dxd_list,
     function(dxd_res, exper) {
       message("Running getHits for: ", exper)
 
       get_hits(
-        dexseq_res               = dxd_res,
-        stranded          = FALSE,
+        dexseq_res        = dxd_res,
+        stranded          = stranded,
         fdr               = fdr,
         n_cores           = ncores,
         add_meta          = TRUE,
@@ -293,9 +294,10 @@ call_hits <- function(dxd_list,
 #' @param posGR_list Named list of GRanges from call_hits()
 #' @param keep_edit_pairs Character vector of "ref targ" strings to keep (default: c("A G", "T C"))
 #' @param ep_thresh Edit proportion threshold (default: 0.8)
-#' @param fc_thresh Fold change threshold (default: 0)
-#' @param FvF Logical (default: FALSE)
-#' @return Filtered named list of GRanges
+#' @param fc_thresh Absolute log2 fold change threshold (default: 0)
+#' @param FvF Logical; if FALSE keep only sites more edited in treat (default: FALSE)
+#' @return Filtered named list of GRanges. Sites with NA proportion or fold
+#'   change are dropped.
 #' @export
 filter_edits <- function(posGR_list,
                          keep_edit_pairs = c("A G", "T C"),
@@ -303,16 +305,16 @@ filter_edits <- function(posGR_list,
                          fc_thresh = 0,
                          FvF = FALSE) {
 
-  imap(
+  purrr::imap(
     posGR_list,
     function(posGR, exper) {
       posGR <- posGR[paste(posGR$ref, posGR$targ) %in% keep_edit_pairs]
-      posGR <- posGR[posGR$prop < ep_thresh]
+      posGR <- posGR[which(posGR$prop < ep_thresh)]
       if (!FvF) {
-        posGR <- posGR[posGR$fold_change > 0]
+        posGR <- posGR[which(posGR$fold_change > 0)]
       }
       if (fc_thresh != 0) {
-        posGR <- posGR[abs(posGR$fold_change) > fc_thresh]
+        posGR <- posGR[which(abs(posGR$fold_change) > fc_thresh)]
       }
 
       message(exper, ": ", length(posGR), " sites after edit filter")
@@ -328,7 +330,8 @@ filter_edits <- function(posGR_list,
 #' @param txi tximport object
 #' @param gtfGR Filtered GTF GRanges
 #' @param ids Named vector gene_id -> gene_symbol
-#' @return Named list of annotated GRanges
+#' @return Named list of annotated GRanges. Unstranded A>G sites are only
+#'   matched to + strand genes and T>C sites to - strand genes.
 #' @export
 annotate_hits <- function(posGR_list_filtered,
                           design,
@@ -336,7 +339,7 @@ annotate_hits <- function(posGR_list_filtered,
                           gtfGR,
                           ids) {
 
-  imap(
+  purrr::imap(
     posGR_list_filtered,
     function(posGR, exper_name) {
       if (is.null(posGR) || length(posGR) == 0) {
@@ -349,7 +352,7 @@ annotate_hits <- function(posGR_list_filtered,
       quant_vec    <- rowMeans(txi$abundance[, ctrl_samples, drop = FALSE], na.rm = TRUE)
 
       annotate_with_genes(
-        pos_gr        = posGR,
+        pos_gr        = addStrandForHyperTRIBE(posGR),
         gtf_gr        = gtfGR,
         gene_ids      = ids,
         quant         = quant_vec,

@@ -12,8 +12,13 @@ compute_site_meta(
   design_vector,
   treat_idx,
   ctrl_idx,
-  symmetric
+  symmetric,
+  genome_ref = NA_character_
 )
+}
+\arguments{
+\item{genome_ref}{Genome reference base for the site, or NA. Used to flag
+SNPs (\code{snp}) and to break ties in \code{\link[=infer_site_ref]{infer_site_ref()}}.}
 }
 \description{
 Compute metadata for a single hit site

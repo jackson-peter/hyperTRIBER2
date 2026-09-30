@@ -42,7 +42,10 @@ get_hits(
 \item{symmetric}{Logical, if TRUE use the "more edited" group for proportion}
 }
 \value{
-GRanges of significant hits with metadata columns
+GRanges of significant hits with metadata columns. \code{ref} is the
+base carried by the samples (see \code{\link[=infer_site_ref]{infer_site_ref()}}); \code{base} is the genome
+reference base (from \code{ref_gr}, else the \code{ref} column of \code{data_list});
+\code{snp} is TRUE when the two differ.
 }
 \description{
 Filters DEXSeq results by FDR, resolves multiple edit types per site,

@@ -3,7 +3,8 @@
 #'
 #' Reshapes per-sample count data into DEXSeq-compatible format:
 #' one row per site×base combination, then writes count tables
-#' and a fake GFF annotation file.
+#' (`counts_<Treat|Control>_<sample>.txt`) and a fake GFF annotation file.
+#' Existing `counts_*.txt` files in `out_dir` are removed first.
 #'
 #' @param data_list Named list of tibbles from extract_count_data / restrict_data
 #' @param design_vector Character vector: "treat" or "control" per sample
@@ -18,13 +19,14 @@ generate_count_files <- function(data_list,
 
   bases <- c("A", "T", "C", "G")
   dir.create(out_dir, showWarnings = FALSE, recursive = TRUE)
+  unlink(list.files(out_dir, pattern = "^counts_.*\\.txt$", full.names = TRUE))
 
   # -- 1. Reshape each sample: wide to long (site_id:base -> count) -----------
   counts_long <- purrr::imap(data_list, function(df, samp_name) {
     # Build long format: one row per site × base
     tidyr::pivot_longer(
       df,
-      cols      = all_of(bases),
+      cols      = dplyr::all_of(bases),
       names_to  = "base",
       values_to = "count"
     ) |>
@@ -38,37 +40,18 @@ generate_count_files <- function(data_list,
   treat_idx   <- which(design_vector == "treat")
   control_idx <- which(design_vector == "control")
 
-  print("test")
-  print(names(counts_long[[1]]))
-  print(head(counts_long[[1]]))
-
-  print("\test")
-  write_counts_old <- function(indices, prefix) {
-    for (k in indices) {
-      samp_name <- names(counts_long)[k]
-      out_file <- file.path(out_dir, paste0("counts_", prefix, "_", samp_name, ".txt"))
-      write.table(
-        counts_long[[k]] |> tibble::column_to_rownames("row_id"),
-        file = out_file,
-        col.names = FALSE, row.names = TRUE, quote = FALSE, sep = "\t"
-      )
-    }
-  }
-
   write_counts <- function(indices, prefix) {
     for (k in indices) {
       samp_name <- names(counts_long)[k]
       out_file <- file.path(out_dir, paste0("counts_", prefix, "_", samp_name, ".txt"))
       df <- counts_long[[k]]
-      write.table(
+      utils::write.table(
         df$count,
         file = out_file,
         col.names = FALSE, row.names = df$row_id, quote = FALSE, sep = "\t"
       )
     }
   }
-
-
 
   write_counts(treat_idx,   "Treat")
   write_counts(control_idx, "Control")
@@ -79,7 +62,7 @@ generate_count_files <- function(data_list,
 
   annotation <- tidyr::pivot_longer(
     ref_df,
-    cols      = all_of(bases),
+    cols      = dplyr::all_of(bases),
     names_to  = "base",
     values_to = "count"
   ) |>
@@ -104,7 +87,7 @@ generate_count_files <- function(data_list,
       col9 = v9
     )
 
-  write.table(
+  utils::write.table(
     annotation,
     file = file.path(out_dir, "annotation_file_made_up_for_DEXSeq.gff"),
     col.names = FALSE, row.names = FALSE, quote = FALSE, sep = "\t"
@@ -131,7 +114,9 @@ generate_count_files <- function(data_list,
 #' tests for differential usage, and estimates fold changes.
 #'
 #' @param out_dir Directory containing count files and GFF from generate_count_files()
-#' @param design_vector Character vector of "control"/"treat" per sample
+#' @param design_vector Character vector of "control"/"treat" per sample. If
+#'   named by sample, exactly those samples' count files are used; otherwise
+#'   all `counts_*.txt` files in `out_dir` are used.
 #' @param n_cores Integer, number of cores for parallel steps
 #' @param fit_type Dispersion fit type passed to estimateDispersions()
 #' @param save_results Logical, whether to save .Rdat to out_dir
@@ -144,7 +129,14 @@ make_test <- function(out_dir,
                       save_results = TRUE) {
 
   # -- 1. Collect input files ------------------------------------------------
-  count_files    <- sort(list.files(out_dir, pattern = "^counts.*\\.txt$", full.names = TRUE))
+  count_pattern <- "^counts_(Treat|Control)_(.+)\\.txt$"
+  if (!is.null(names(design_vector))) {
+    prefix <- ifelse(design_vector == "treat", "Treat", "Control")
+    count_files <- file.path(out_dir, paste0("counts_", prefix, "_", names(design_vector), ".txt"))
+    count_files <- count_files[file.exists(count_files)]
+  } else {
+    count_files <- sort(list.files(out_dir, pattern = count_pattern, full.names = TRUE))
+  }
   flattened_file <- list.files(out_dir, pattern = "\\.gff$", full.names = TRUE)
 
   stopifnot(
@@ -153,27 +145,24 @@ make_test <- function(out_dir,
     "Count files don't match design" = length(count_files) == length(design_vector)
   )
 
-  # -- 2. Build sample table -------------------------------------------------
-  # Count files are sorted alphabetically: countsControl1, countsControl2, ..., countsTreat1, ...
-  # So sample table must match that order: controls first, then treats
-  n_control <- sum(design_vector == "control")
-  n_treat   <- sum(design_vector == "treat")
-
+  # -- 2. Build sample table from the file names -----------------------------
+  file_names <- basename(count_files)
   sample_table <- data.frame(
-    row.names = c(
-      paste0("control_", seq_len(n_control)),
-      paste0("treat_",   seq_len(n_treat))
-    ),
-    condition = c(
-      rep("control", n_control),
-      rep("treat",   n_treat)
-    )
+    row.names = sub(count_pattern, "\\2", file_names),
+    condition = factor(tolower(sub(count_pattern, "\\1", file_names)),
+                       levels = c("control", "treat"))
   )
+  n_control <- sum(sample_table$condition == "control")
+  n_treat   <- sum(sample_table$condition == "treat")
 
   message("Running DEXSeq with ", n_control, " control + ", n_treat, " treat samples")
 
   # -- 3. DEXSeq pipeline ----------------------------------------------------
-  bp_param <- BiocParallel::MulticoreParam(workers = n_cores)
+  bp_param <- if (n_cores > 1) {
+    BiocParallel::MulticoreParam(workers = n_cores)
+  } else {
+    BiocParallel::SerialParam()
+  }
 
   dxd <- DEXSeq::DEXSeqDataSetFromHTSeq(
     countfiles    = count_files,
@@ -257,7 +246,7 @@ make_glm_test <- function(data_list,
 
     tryCatch({
       if (family == "quasibinomial") {
-        fit <- glm(cbind(g, a) ~ condition, family = quasibinomial(link = "logit"))
+        fit <- stats::glm(cbind(g, a) ~ condition, family = stats::quasibinomial(link = "logit"))
         coefs <- summary(fit)$coefficients
         if (nrow(coefs) >= 2) {
           logFCs[i] <- coefs[2, 1]
@@ -275,7 +264,7 @@ make_glm_test <- function(data_list,
       #   }
 
       } else if (family == "binomial") {
-        fit <- glm(cbind(g, a) ~ condition, family = binomial(link = "logit"))
+        fit <- stats::glm(cbind(g, a) ~ condition, family = stats::binomial(link = "logit"))
         coefs <- summary(fit)$coefficients
         if (nrow(coefs) >= 2) {
           logFCs[i] <- coefs[2, 1]
@@ -289,7 +278,7 @@ make_glm_test <- function(data_list,
     site_id = site_ids,
     logFC   = logFCs,
     pvalue  = pvals,
-    padj    = p.adjust(pvals, method = "BH"),
+    padj    = stats::p.adjust(pvals, method = "BH"),
     stringsAsFactors = FALSE
   )
 

@@ -15,7 +15,9 @@ make_test(
 \arguments{
 \item{out_dir}{Directory containing count files and GFF from generate_count_files()}
 
-\item{design_vector}{Character vector of "control"/"treat" per sample}
+\item{design_vector}{Character vector of "control"/"treat" per sample. If
+named by sample, exactly those samples' count files are used; otherwise
+all \code{counts_*.txt} files in \code{out_dir} are used.}
 
 \item{n_cores}{Integer, number of cores for parallel steps}
 

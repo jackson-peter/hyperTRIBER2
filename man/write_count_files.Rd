@@ -4,7 +4,12 @@
 \alias{write_count_files}
 \title{Generate DEXSeq count files for all experiments}
 \usage{
-write_count_files(data_restricted_lists, design_vectors, res_dir)
+write_count_files(
+  data_restricted_lists,
+  design_vectors,
+  res_dir,
+  stranded = FALSE
+)
 }
 \arguments{
 \item{data_restricted_lists}{Named list from restrict_data()}
@@ -12,6 +17,8 @@ write_count_files(data_restricted_lists, design_vectors, res_dir)
 \item{design_vectors}{Named list of named condition vectors}
 
 \item{res_dir}{Top-level results directory}
+
+\item{stranded}{Logical (default: FALSE)}
 }
 \description{
 Generate DEXSeq count files for all experiments

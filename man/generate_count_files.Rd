@@ -21,5 +21,6 @@ Invisibly returns the annotation tibble
 \description{
 Reshapes per-sample count data into DEXSeq-compatible format:
 one row per site×base combination, then writes count tables
-and a fake GFF annotation file.
+(\verb{counts_<Treat|Control>_<sample>.txt}) and a fake GFF annotation file.
+Existing \code{counts_*.txt} files in \code{out_dir} are removed first.
 }
